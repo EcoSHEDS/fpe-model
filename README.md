@@ -4,6 +4,14 @@ An [EcoSHEDS](https://www.usgs.gov/apps/ecosheds/) Project
 
 :bangbang: **WARNING**: this repo is under heavy development. Use at your own risk.
 
+## Background
+
+This repo contains the source code for a deep learning model designed to estimate streamflow (or other hydrologic metrics) using timelapse imagery. This model will ultimately be integrated in the [EcoSHEDS Flow Photo Explorer](https://www.usgs.gov/apps/ecosheds/fpe/).
+
+Original development of this model was completed by Amrita Gupta and Tony Chang at [Conservation Science Partners Inc](https://www.csp-inc.org/) with funding from the U.S. Geological Survey and the National Geographic Society. See the following paper for more information:
+
+> Gupta, A., Chang, T., Walker, J., and Letcher, B. (2022). *Towards Continuous Streamflow Monitoring with Time-Lapse Cameras and Deep Learning.* In ACM SIGCAS/SIGCHI Conference on Computing and Sustainable Societies (COMPASS) (COMPASS '22). Association for Computing Machinery, New York, NY, USA, 353–363. https://doi.org/10.1145/3530190.3534805
+
 ## Python Environment
 
 Create conda environment
