@@ -1,9 +1,9 @@
-[submodule "third_party/yolov5"]
-	path = third_party/yolov5
-	url = https://github.com/ecologize/yolov5/
-[submodule "third_party/cameratraps"]
-	path = third_party/cameratraps
+[submodule "pii-detector/lib/yolov5"]
+	path = pii-detector/lib/yolov5
+	url = https://github.com/ecologize/yolov5
+[submodule "pii-detector/lib/cameratraps"]
+	path = pii-detector/lib/cameratraps
 	url = https://github.com/Microsoft/cameratraps
-[submodule "third_party/ai4eutils"]
-	path = third_party/ai4eutils
+[submodule "pii-detector/lib/ai4eutils"]
+	path = pii-detector/lib/ai4eutils
 	url = https://github.com/Microsoft/ai4eutils
