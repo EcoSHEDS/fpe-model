@@ -56,7 +56,7 @@ atherton_cutoff <- tibble(
   clean_names()
 
 atherton_cutoff |>
-  select(cutoff, sensitivity, specificity, precision, recall, f1) |> 
+  select(cutoff, precision, recall, f1) |> 
   pivot_longer(-cutoff) |> 
   ggplot(aes(cutoff, value)) + 
   geom_line(aes(color = name)) +
