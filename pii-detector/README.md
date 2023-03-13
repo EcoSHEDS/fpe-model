@@ -11,7 +11,7 @@ FPE Personal Identifying Information (PII) Detector
 - [AWS Sagemaker | Use Your Own Inference Code with Batch Transform](https://docs.aws.amazon.com/sagemaker/latest/dg/your-algorithms-batch-code.html)
 - [AWS ML Blog | Run computer vision inference on large videos with Amazon SageMaker asynchronous endpoints](https://aws.amazon.com/blogs/machine-learning/run-computer-vision-inference-on-large-videos-with-amazon-sagemaker-asynchronous-endpoints/): using asynchronous endpoints
 
-## Instructions
+## Instructions for Deploying to Sagemaker
 
 ### Python Environment
 
@@ -48,18 +48,16 @@ Or they can be re-downloaded and processed:
 *Step 2*: Convert megadetector files to torchscript using `yolov5`
 
 ```sh
-python lib/yolov5/export.py --weights models/mdv5/md_v5a.0.0.pt --img 640 640 --batch 1 --include torchscript
-python lib/yolov5/export.py --weights models/mdv5/md_v5b.0.0.pt --img 640 640 --batch 1 --include torchscript
+python lib/yolov5/export.py --weights models/mdv5/md_v5a.0.0.pt --img 640 --batch 1 --include torchscript
+python lib/yolov5/export.py --weights models/mdv5/md_v5b.0.0.pt --img 640 --batch 1 --include torchscript
 ```
 
 *Step 3*: Convert torchscript to torch model archive (mar)
 
 ```sh
-torch-model-archiver --model-name mdv5a --version 1.0.0 --serialized-file models/mdv5/md_v5a.0.0.torchscript --extra-files index_to_name.json --handler mdv5_handler.py
-mv mdv5a.mar models/mdv5/
+torch-model-archiver --model-name mdv5a --version 1.0.0 --serialized-file models/mdv5/md_v5a.0.0.torchscript --extra-files index_to_name.json --handler mdv5_handler.py && mv mdv5a.mar models/mdv5/
 
-torch-model-archiver --model-name mdv5b --version 1.0.0 --serialized-file models/mdv5/md_v5b.0.0.torchscript --extra-files index_to_name.json --handler mdv5_handler.py
-mv mdv5b.mar models/mdv5/
+torch-model-archiver --model-name mdv5b --version 1.0.0 --serialized-file models/mdv5/md_v5b.0.0.torchscript --extra-files index_to_name.json --handler mdv5_handler.py && mv mdv5b.mar models/mdv5/
 ```
 
 *Step 4*: Compress for upload to S3 (see `deploy-mdv5.ipynb`)
@@ -87,7 +85,27 @@ See `deploy-mdv5.ipynb` for deployment instructions
 
 ----
 
-## Megadetector (Amrita's Notes)
+## Running MegaDetector Locally
+
+Create conda environment from `Microsoft/cameratraps`:
+
+```
+conda env create --file lib/cameratraps/environment-detector.yml
+conda activate cameratraps-detector
+```
+
+Finally, add the submodule repositories to your Python path (whenever you start a new shell).
+```
+export PYTHONPATH="$PYTHONPATH:$(pwd)/lib/cameratraps:$(pwd)/lib/ai4eutils:$(pwd)/lib/yolov5"
+```
+
+**3. Run MegaDetector on a batch of images in a folder.**
+```
+python lib/cameratraps/detection/run_detector_batch.py models/mdv5/md_v5a.0.0.pt /path/to/images /path/to/output-640.json --output_relative_filenames --recursive --ncores 4
+```
+
+
+## MegaDetector (Amrita's Notes)
 
 ### Detecting Personally-Identifiable Information in Photos with MegaDetector
 
