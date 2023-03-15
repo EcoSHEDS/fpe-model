@@ -101,7 +101,7 @@ export PYTHONPATH="$PYTHONPATH:$(pwd)/lib/cameratraps:$(pwd)/lib/ai4eutils:$(pwd
 
 **3. Run MegaDetector on a batch of images in a folder.**
 ```
-python lib/cameratraps/detection/run_detector_batch.py models/mdv5/md_v5a.0.0.pt /path/to/images /path/to/output-640.json --output_relative_filenames --recursive --ncores 4
+python lib/cameratraps/detection/run_detector_batch.py models/mdv5/md_v5a.0.0.pt data/atherton/img data/atherton/mdv5a-640.json  --output_relative_filenames --recursive --ncores 4 --image_size 640
 ```
 
 
