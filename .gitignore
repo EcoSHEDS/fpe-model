@@ -54,3 +54,6 @@ po/*~
 
 # RStudio Connect folder
 rsconnect/
+
+# .env
+.env*.local

@@ -26,12 +26,21 @@ Set up conda environment:
 ```sh
 conda create -n fpe-pii python=3.8
 conda activate fpe-pii
-pip install -r lib/yolov5/requirements.txt torch-model-archiver
+pip install -r lib/yolov5/requirements.txt torch-model-archiver "dvc[s3]"
 ```
 
 ### Model Artifacts
 
-Original and processed artifacts can be fetched directly with DVC:
+Original and processed artifacts can be fetched directly with DVC.
+
+First, set up credentials to access S3 bucket (`walkerenvres-fpe-models`)
+
+```
+dvc remote modify --local storage access_key_id ''
+dvc remote modify --local storage secret_access_key ''
+```
+
+Then pull from bucket
 
 ```
 dvc pull
@@ -55,9 +64,9 @@ python lib/yolov5/export.py --weights models/mdv5/md_v5b.0.0.pt --img 640 --batc
 *Step 3*: Convert torchscript to torch model archive (mar)
 
 ```sh
-torch-model-archiver --model-name mdv5a --version 1.0.0 --serialized-file models/mdv5/md_v5a.0.0.torchscript --extra-files index_to_name.json --handler mdv5_handler.py && mv mdv5a.mar models/mdv5/
+torch-model-archiver --model-name mdv5a --version 1.0.0 --serialized-file models/mdv5/md_v5a.0.0.torchscript --extra-files index_to_name.json --handler mdv5_handler_letterbox.py && mv mdv5a.mar models/mdv5/
 
-torch-model-archiver --model-name mdv5b --version 1.0.0 --serialized-file models/mdv5/md_v5b.0.0.torchscript --extra-files index_to_name.json --handler mdv5_handler.py && mv mdv5b.mar models/mdv5/
+torch-model-archiver --model-name mdv5b --version 1.0.0 --serialized-file models/mdv5/md_v5b.0.0.torchscript --extra-files index_to_name.json --handler mdv5_handler_letterbox.py && mv mdv5b.mar models/mdv5/
 ```
 
 *Step 4*: Compress for upload to S3 (see `deploy-mdv5.ipynb`)
@@ -67,6 +76,13 @@ cd models/mdv5
 tar czvf mdv5a.tar.gz mdv5a.mar
 tar czvf mdv5b.tar.gz mdv5b.mar
 cd ../..
+```
+
+*Step 5*: Upload to S3 model bucket
+
+```sh
+aws s3 cp models/mdv5/mdv5a.tar.gz s3://<MODEL_BUCKET>/pii
+aws s3 cp models/mdv5/mdv5b.tar.gz s3://<MODEL_BUCKET>/pii
 ```
 
 ### Run TorchServe Locally
@@ -101,7 +117,7 @@ export PYTHONPATH="$PYTHONPATH:$(pwd)/lib/cameratraps:$(pwd)/lib/ai4eutils:$(pwd
 
 **3. Run MegaDetector on a batch of images in a folder.**
 ```
-python lib/cameratraps/detection/run_detector_batch.py models/mdv5/md_v5a.0.0.pt data/atherton/img data/atherton/mdv5a-640.json  --output_relative_filenames --recursive --ncores 4 --image_size 640
+python lib/cameratraps/detection/run_detector_batch.py models/mdv5/md_v5a.0.0.pt /path/to/images /path/to/output-640.json --output_relative_filenames --recursive --ncores 4
 ```
 
 
