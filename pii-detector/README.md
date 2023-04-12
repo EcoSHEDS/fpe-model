@@ -29,60 +29,32 @@ conda activate fpe-pii
 pip install -r lib/yolov5/requirements.txt torch-model-archiver "dvc[s3]"
 ```
 
-### Model Artifacts
-
-Original and processed artifacts can be fetched directly with DVC.
-
-First, set up credentials to access S3 bucket (`walkerenvres-fpe-models`)
+Set up dvc by adding credentials to access S3 bucket (`walkerenvres-fpe-models`)
 
 ```
 dvc remote modify --local storage access_key_id ''
 dvc remote modify --local storage secret_access_key ''
 ```
 
-Then pull from bucket
-
-```
-dvc pull
-```
-
-Or they can be re-downloaded and processed:
-
 *Step 1*: Fetch megadetector checkpoints (.pt) files from github
 
 ```sh
-./fetch-mdv5.sh
+./fetch-mdv5.sh # fetch from Github
+dvc pull        # or pull via dvc
 ```
 
-*Step 2*: Convert megadetector files to torchscript using `yolov5`
+*Step 2*: Convert megadetector weights to model archive and compress
 
 ```sh
-python lib/yolov5/export.py --weights models/mdv5/md_v5a.0.0.pt --img 640 --batch 1 --include torchscript
-python lib/yolov5/export.py --weights models/mdv5/md_v5b.0.0.pt --img 640 --batch 1 --include torchscript
+./build-mdv5.sh a
+./build-mdv5.sh b
 ```
 
-*Step 3*: Convert torchscript to torch model archive (mar)
+*Step 3*: Upload to S3 model bucket
 
 ```sh
-torch-model-archiver --model-name mdv5a --version 1.0.0 --serialized-file models/mdv5/md_v5a.0.0.torchscript --extra-files index_to_name.json --handler mdv5_handler_letterbox.py && mv mdv5a.mar models/mdv5/
-
-torch-model-archiver --model-name mdv5b --version 1.0.0 --serialized-file models/mdv5/md_v5b.0.0.torchscript --extra-files index_to_name.json --handler mdv5_handler_letterbox.py && mv mdv5b.mar models/mdv5/
-```
-
-*Step 4*: Compress for upload to S3 (see `deploy-mdv5.ipynb`)
-
-```sh
-cd models/mdv5
-tar czvf mdv5a.tar.gz mdv5a.mar
-tar czvf mdv5b.tar.gz mdv5b.mar
-cd ../..
-```
-
-*Step 5*: Upload to S3 model bucket
-
-```sh
-aws s3 cp models/mdv5/mdv5a.tar.gz s3://<MODEL_BUCKET>/pii
-aws s3 cp models/mdv5/mdv5b.tar.gz s3://<MODEL_BUCKET>/pii
+aws s3 cp model/mdv5a.tar.gz s3://<MODEL_BUCKET>/<PREFIX>/
+aws s3 cp model/mdv5b.tar.gz s3://<MODEL_BUCKET>/<PREFIX>/
 ```
 
 ### Run TorchServe Locally
@@ -97,7 +69,21 @@ Run torchserve via docker
 
 ### Sagemaker Deployment
 
-See `deploy-mdv5.ipynb` for deployment instructions
+Build docker container
+
+```sh
+export AWS_ACCOUNT=
+export AWS_REGION=
+
+export PII_REGISTRY_NAME=fpe-pii
+export PII_IMAGE=${AWS_ACCOUNT}.dkr.ecr.${AWS_REGION}.amazonaws.com/${PII_REGISTRY_NAME}:latest
+
+# aws ecr create-repository --repository-name ${PII_REGISTRY_NAME}
+aws ecr get-login-password --region ${AWS_REGION} | docker login --username AWS --password-stdin ${AWS_ACCOUNT}.dkr.ecr.${AWS_REGION}.amazonaws.com
+docker build -t ${PII_REGISTRY_NAME} .
+docker tag ${PII_REGISTRY_NAME}:latest ${PII_IMAGE}
+docker push ${PII_IMAGE}
+```
 
 ----
 
@@ -117,9 +103,10 @@ export PYTHONPATH="$PYTHONPATH:$(pwd)/lib/cameratraps:$(pwd)/lib/ai4eutils:$(pwd
 
 **3. Run MegaDetector on a batch of images in a folder.**
 ```
-python lib/cameratraps/detection/run_detector_batch.py models/mdv5/md_v5a.0.0.pt /path/to/images /path/to/output-640.json --output_relative_filenames --recursive --ncores 4
+python lib/cameratraps/detection/run_detector_batch.py model/md_v5a.0.0.pt /path/to/images /path/to/output-640.json --output_relative_filenames --recursive --ncores 4
 ```
 
+----
 
 ## MegaDetector (Amrita's Notes)
 
