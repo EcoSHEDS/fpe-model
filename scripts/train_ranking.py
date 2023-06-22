@@ -1,12 +1,14 @@
 import os
 import sys
 import time
+import random
 import argparse
 import copy
 import pickle
 import json
 import pandas as pd
 import numpy as np
+from functools import reduce
 from tqdm import tqdm
 from torchvision.transforms import (
     Resize,
@@ -30,7 +32,7 @@ from src.datasets import (
 )
 from src.modules import ResNetRankNet
 from src.losses import RankNetLoss
-from src.utils import fit, validate
+from src.utils import filter_by_hour, filter_by_month, fit, validate
 
 
 # DATALOADING OPTS
@@ -39,16 +41,52 @@ def data_args(parser):
         "Data", "Arguments control Data and loading for training"
     )
     group.add_argument(
+        "--site",
+        type=str,
+        required=True,
+        help="name of site with linked images and flows",
+    )
+    group.add_argument(
         "--data-file",
         type=str,
         required=True,
         help="path to CSV file with linked images and flows",
     )
     group.add_argument(
-        "--image-dir",
+        "--image-root-dir",
         type=str,
         required=True,
         help="path to folder containing images listed in data-file",
+    )
+    group.add_argument(
+        "--col-timestamp",
+        type=str,
+        default="timestamp",
+        help="datetime column name in data-file",
+    )
+    group.add_argument(
+        "--min-hour",
+        type=int,
+        default=0,
+        help="minimum timestamp hour for including samples in data-file",
+    )
+    group.add_argument(
+        "--max-hour",
+        type=int,
+        default=23,
+        help="maximum timestamp hour for including samples in data-file",
+    )
+    group.add_argument(
+        "--min-month",
+        type=int,
+        default=1,
+        help="minimum timestamp month for including samples in data-file",
+    )
+    group.add_argument(
+        "--max-month",
+        type=int,
+        default=12,
+        help="maximum timestamp month for including samples in data-file",
     )
     # group.add_argument(
     #     "--split-idx",
@@ -112,10 +150,10 @@ def base_train_args(parser):
     )
 
 
-# RANKING MODEL TRAINING ARGS
-def ranking_train_args(parser):
+# RANKING MODEL DATA ARGS
+def ranking_data_args(parser):
     group = parser.add_argument_group(
-        "RankNet Training", "Arguments to configure RankNet training"
+        "RankNet Training", "Arguments to configure RankNet training data"
     )
     group.add_argument(
         "--margin-mode",
@@ -144,7 +182,7 @@ def ranking_train_args(parser):
     )
 
 
-# SAVING ARGS
+# # SAVING ARGS
 def saving_args(parser):
     group = parser.add_argument_group(
         "Results Saving", "Arguments to configure saving outputs"
@@ -161,144 +199,200 @@ def get_args():
     parser = argparse.ArgumentParser(description="")
     parser.add_argument("--seed", default=939, type=int, help="random seed")
     data_args(parser)
+    ranking_data_args(parser)
     model_args(parser)
     base_train_args(parser)
-    ranking_train_args(parser)
     saving_args(parser)
 
-    # add temporary arguments that should be refactored out
-    parser.add_argument("--pii-detection-results", default=None)
+    # # add temporary arguments that should be refactored out
+    # parser.add_argument("--pii-detection-results", default=None)
     args = parser.parse_args()
     return args
 
 
-def filter_detections(detection_results, confidence_threshold: float, categories=[]):
-    """Filter detections by confidence threshold and category.
-
-    Args:
-        detection_results: A dict containing MegaDetector v5 results.
-        confidence_threshold: A float representing the confidence below
-          which detections should be filtered out.
-        categories: A list of categories of detections to return. Detections
-          in other categories will be filtered out.
-
-    Returns:
-        A dict containing only MegaDetector v5 detection results above the
-        specified confidence threshold and belonging to the specified
-        categories.
-
-    Raises:
-
-    """
-    filtered_results = copy.deepcopy(detection_results)
-    for image in tqdm(filtered_results["images"]):
-        # keep only detections above confidence_threshold
-        # and of the specified categories
-        image["detections"] = [
-            det
-            for det in image["detections"]
-            if (det["conf"] >= confidence_threshold) and (det["category"] in categories)
-        ]
-        image["max_detection_conf"] = (
-            max([det["conf"] for det in image["detections"]])
-            if len(image["detections"]) > 0
-            else 0.0
-        )
-
-    # keep only images that have at least 1 detection after filtering
-    filtered_results["images"] = [
-        image for image in filtered_results["images"] if len(image["detections"]) > 0
-    ]
-    return filtered_results
-
-
-def _load_data_file(filepath, pii_detections):
-    # logger.info(f"load dataset: {filepath}")
-    df = pd.read_csv(filepath, dtype={"flow_cfs": np.float32})
-    df["timestamp"] = pd.to_datetime(df["timestamp"]).dt.tz_convert(tz="US/Eastern")
-    df.sort_values(by="timestamp", inplace=True, ignore_index=True)
-
-    # filter by hour
-    min_hour = 6
-    max_hour = 18
-    # logger.info(f"filter(hour): {min_hour} to {max_hour}")
-    df = df[df["timestamp"].dt.hour.between(min_hour, max_hour)]
-
-    # filter by month
-    min_month = 3
-    max_month = 11
-    # logger.info(f"filter(month): {min_month} to {max_month}")
-    df = df[df["timestamp"].dt.month.between(min_month, max_month)]
-
-    # filter by pii detections
-    pii_results = json.load(open(args.pii_detection_results, "r"))
-    pii_detections = filter_detections(pii_results, 0.2, ["2", "3"])["images"]
-    pii_files = pd.DataFrame(pii_detections)["file"].tolist()
-    df = df[~df["filename"].isin(pii_files)]
-
-    # logger.info(
-    #     f"dataset loaded\n  rows: {len(df)}\n  flow: {df.flow_cfs.mean():>.2f} cfs"
-    # )
+def load_data(data_file, col_timestamp="timestamp"):
+    df = pd.read_csv(data_file)
+    df[col_timestamp] = pd.to_datetime(df[col_timestamp])
+    df.sort_values(by=col_timestamp, inplace=True, ignore_index=True)
     return df
+
+
+def create_image_transforms(
+    resize_shape,
+    input_shape,
+    augmentation=True,
+    normalization=True,
+    means=None,
+    stds=None,
+):
+    image_transforms = {
+        "train": [
+            Resize(resize_shape),
+        ],
+        "eval": [
+            Resize(resize_shape),
+        ],
+    }
+
+    # augmentation
+    image_transforms["train"].extend(
+        [
+            RandomCrop(input_shape),
+            RandomHorizontalFlip(),
+            RandomRotation(10),
+            ColorJitter(),
+        ]  # type: ignore
+    ) if augmentation else image_transforms["train"].append(
+        CenterCrop(input_shape)  # type: ignore
+    )  # type: ignore
+    image_transforms["eval"].append(CenterCrop(input_shape))  # type: ignore
+
+    # normalization
+    if normalization:
+        image_transforms["train"].append(Normalize(means, stds))  # type: ignore
+        image_transforms["eval"].append(Normalize(means, stds))  # type: ignore
+
+    # composition
+    image_transforms["train"] = Compose(image_transforms["train"])  # type: ignore
+    image_transforms["eval"] = Compose(image_transforms["eval"])  # type: ignore
+    return image_transforms
+
+
+# def filter_detections(detection_results, confidence_threshold: float, categories=[]):
+#     """Filter detections by confidence threshold and category.
+
+#     Args:
+#         detection_results: A dict containing MegaDetector v5 results.
+#         confidence_threshold: A float representing the confidence below
+#           which detections should be filtered out.
+#         categories: A list of categories of detections to return. Detections
+#           in other categories will be filtered out.
+
+#     Returns:
+#         A dict containing only MegaDetector v5 detection results above the
+#         specified confidence threshold and belonging to the specified
+#         categories.
+
+#     Raises:
+
+#     """
+#     filtered_results = copy.deepcopy(detection_results)
+#     for image in tqdm(filtered_results["images"]):
+#         # keep only detections above confidence_threshold
+#         # and of the specified categories
+#         image["detections"] = [
+#             det
+#             for det in image["detections"]
+#             if (det["conf"] >= confidence_threshold) and (det["category"] in categories)
+#         ]
+#         image["max_detection_conf"] = (
+#             max([det["conf"] for det in image["detections"]])
+#             if len(image["detections"]) > 0
+#             else 0.0
+#         )
+
+#     # keep only images that have at least 1 detection after filtering
+#     filtered_results["images"] = [
+#         image for image in filtered_results["images"] if len(image["detections"]) > 0
+#     ]
+#     return filtered_results
+
+
+# def _load_data_file(filepath, pii_detections):
+#     # logger.info(f"load dataset: {filepath}")
+#     df = pd.read_csv(filepath, dtype={"flow_cfs": np.float32})
+#     df["timestamp"] = pd.to_datetime(df["timestamp"]).dt.tz_convert(tz="US/Eastern")
+#     df.sort_values(by="timestamp", inplace=True, ignore_index=True)
+
+#     # filter by hour
+#     min_hour = 6
+#     max_hour = 18
+#     # logger.info(f"filter(hour): {min_hour} to {max_hour}")
+#     df = df[df["timestamp"].dt.hour.between(min_hour, max_hour)]
+
+#     # filter by month
+#     min_month = 3
+#     max_month = 11
+#     # logger.info(f"filter(month): {min_month} to {max_month}")
+#     df = df[df["timestamp"].dt.month.between(min_month, max_month)]
+
+#     # filter by pii detections
+#     pii_results = json.load(open(args.pii_detection_results, "r"))
+#     pii_detections = filter_detections(pii_results, 0.2, ["2", "3"])["images"]
+#     pii_files = pd.DataFrame(pii_detections)["file"].tolist()
+#     df = df[~df["filename"].isin(pii_files)]
+
+#     # logger.info(
+#     #     f"dataset loaded\n  rows: {len(df)}\n  flow: {df.flow_cfs.mean():>.2f} cfs"
+#     # )
+#     return df
 
 
 if __name__ == "__main__":
     args = get_args()
 
-    # Load data
-    df = _load_data_file(args.data_file, args.pii_detection_results)
-    # NOTE: Dataset Splitter class is incomplete
-    # NOTE: Fragile to return indices of dataset copy sorted in function call
-    train_inds, val_inds, test_inds = RandomStratifiedWeeklyFlow().split(
-        df, 0.8, 0.1, 0.1
-    )
-    train_df, val_df, test_df = (
-        df.iloc[train_inds],
-        df.iloc[val_inds],
-        df.iloc[test_inds],
-    )
+    # # # # # # # # # # # # # # # # # # # # # # # # #
+    # REPRODUCIBILITY
+    # # # # # # # # # # # # # # # # # # # # # # # # #
+    random.seed(args.seed)
+    np.random.seed(args.seed)
 
-    # Create PyTorch Datsets and Dataloaders
-    train_ds_tmp = FlowPhotoDataset(train_df, os.path.dirname(args.image_dir))
-    train_mean, train_std = train_ds_tmp.compute_mean_std()
-    image = train_ds_tmp.get_image(0)
+    # In general seed PyTorch operations
+    torch.manual_seed(args.seed)
+    # If you are using CUDA on 1 GPU, seed it
+    torch.cuda.manual_seed(args.seed)
+    # If you are using CUDA on more than 1 GPU, seed them all
+    torch.cuda.manual_seed_all(args.seed)
+    # Disable the inbuilt cudnn auto-tuner that finds the best algorithm to use for your hardware.
+    # torch.backends.cudnn.benchmark = False # this might be slowing down training
+    # Certain operations in Cudnn are not deterministic, and this line will force them to behave!
+    # torch.backends.cudnn.deterministic = True # this might be slowing down training
+
+    # # # # # # # # # # # # # # # # # # # # # # # # #
+    # LOAD DATA
+    # # # # # # # # # # # # # # # # # # # # # # # # #
+    df = load_data(args.data_file)
+
+    # # # # # # # # # # # # # # # # # # # # # # # # #
+    # FILTER BY TIME OF DAY, MONTH OF YEAR, ETC.
+    # # # # # # # # # # # # # # # # # # # # # # # # #
+    df_filters = [
+        (filter_by_hour, {"min_hour": args.min_hour, "max_hour": args.max_hour}),
+        (filter_by_month, {"min_month": args.min_month, "max_month": args.max_month}),
+    ]
+    df = reduce(lambda _df, filter: _df.pipe(filter[0], **filter[1]), df_filters, df)
+    df.reset_index(inplace=True)
+    splits = RandomStratifiedWeeklyFlow().split(df, 0.8, 0.1, 0.1)
+    train_df, val_df, test_df = splits["train"], splits["val"], splits["test"]
+
+    # # # # # # # # # # # # # # # # # # # # # # # # #
+    # CREATE PYTORCH DATASETS AND DATALOADERS
+    # # # # # # # # # # # # # # # # # # # # # # # # #
+    train_ds = FlowPhotoRankingDataset(train_df, os.path.dirname(args.image_root_dir))
+    img_sample_mean, img_sample_std = train_ds.compute_mean_std()
+    image = train_ds.get_image(0)
     aspect = image.shape[2] / image.shape[1]
     resize_shape = [480, np.int32(480 * aspect)]
     input_shape = [384, np.int32(384 * aspect)]
-
-    train_transforms = [Resize(resize_shape)]
-    if args.augment:
-        train_transforms.append(RandomCrop(input_shape))
-        train_transforms.append(RandomHorizontalFlip())
-        train_transforms.append(RandomRotation(10))
-        train_transforms.append(ColorJitter())
-    else:
-        train_transforms.append(CenterCrop(input_shape))
-    # train_transforms.append(ToTensor())
-    if args.normalize:
-        train_transforms.append(Normalize(train_mean, train_std))
-    train_transform = Compose(train_transforms)
-    train_ds = FlowPhotoRankingDataset(
-        train_df, os.path.dirname(args.image_dir), transform=train_transform
+    image_transforms = create_image_transforms(
+        resize_shape, input_shape, means=img_sample_mean, stds=img_sample_std
     )
+
+    train_ds.transform = image_transforms["train"]
+    val_ds = FlowPhotoRankingDataset(
+        val_df, os.path.dirname(args.image_root_dir), transform=image_transforms["eval"]
+    )
+    test_ds = FlowPhotoRankingDataset(
+        test_df,
+        os.path.dirname(args.image_root_dir),
+        transform=image_transforms["eval"],
+    )
+
     train_ds.rank_image_pairs(
         random_pairs, args.num_train_pairs, args.margin, args.margin_mode
     )
-
-    eval_transforms = [Resize(resize_shape)]
-    eval_transforms.append(CenterCrop(input_shape))
-    # eval_transforms.append(ToTensor())
-    if args.normalize:
-        eval_transforms.append(Normalize(train_mean, train_std))
-    eval_transform = Compose(eval_transforms)
-    val_ds = FlowPhotoRankingDataset(
-        val_df, os.path.dirname(args.image_dir), transform=eval_transform
-    )
     val_ds.rank_image_pairs(
         random_pairs, args.num_eval_pairs, args.margin, args.margin_mode
-    )
-    test_ds = FlowPhotoRankingDataset(
-        test_df, os.path.dirname(args.image_dir), transform=eval_transform
     )
     test_ds.rank_image_pairs(
         random_pairs, args.num_eval_pairs, args.margin, args.margin_mode
@@ -314,7 +408,9 @@ if __name__ == "__main__":
         test_ds, batch_size=args.test_batch_size, shuffle=False, num_workers=4
     )
 
-    # Initialize Model
+    # # # # # # # # # # # # # # # # # # # # # # # # #
+    # INITIALIZE MODEL
+    # # # # # # # # # # # # # # # # # # # # # # # # #
     if torch.cuda.is_available():
         use_gpu = True
         device = torch.device("cuda")
@@ -336,7 +432,9 @@ if __name__ == "__main__":
     model = torch.nn.DataParallel(model)
     model.to(device)
 
-    # Initialize loss, optimizer, lr scheduler
+    # # # # # # # # # # # # # # # # # # # # # # # # #
+    # INITIALIZE LOSS, OPTIMIZER, LR SCHEDULER
+    # # # # # # # # # # # # # # # # # # # # # # # # #
     criterion = RankNetLoss()
     optimizer = torch.optim.SGD(model.parameters(), lr=args.lr, momentum=0.9)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
@@ -355,7 +453,7 @@ if __name__ == "__main__":
     paramstrings.append("ranking")
     paramstrings.extend(["margin", str(args.margin)])
     paramstrings.extend(["randompairs", str(args.num_train_pairs)])
-    # paramstrings.append(args["site"])
+    paramstrings.append(args.site)
     if args.augment:
         paramstrings.append("augment")
     if args.normalize:
@@ -396,7 +494,9 @@ if __name__ == "__main__":
 
         # periodically save model checkpoints
         epoch_checkpoint_file = "./epoch%d_" % epoch + paramstr + ".ckpt"
-        epoch_checkpoint_save_path = os.path.join(args.save_dir, epoch_checkpoint_file)
+        epoch_checkpoint_save_path = os.path.join(
+            args.save_dir, "checkpoints", epoch_checkpoint_file
+        )
         torch.save(
             {
                 "epoch": epoch,
@@ -418,6 +518,3 @@ if __name__ == "__main__":
     metrics_save_path = os.path.join(args.save_dir, metrics_file)
     with open(metrics_save_path, "wb") as f:
         pickle.dump(metriclogs, f, protocol=pickle.HIGHEST_PROTOCOL)
-
-    # # convert argparse.Namespace to dictionary: vars(args)
-    # main(vars(args))
