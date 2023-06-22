@@ -2,4 +2,5 @@
 *.pth
 *.csv
 data/
+results/
 .ipynb_checkpoints
