@@ -3,4 +3,6 @@
 *.csv
 data/
 results/
+__pycache__/
+*.pyc
 .ipynb_checkpoints
