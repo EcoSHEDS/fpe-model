@@ -106,6 +106,28 @@ export PYTHONPATH="$PYTHONPATH:$(pwd)/lib/cameratraps:$(pwd)/lib/ai4eutils:$(pwd
 python lib/cameratraps/detection/run_detector_batch.py model/md_v5a.0.0.pt /path/to/images /path/to/output-640.json --output_relative_filenames --recursive --ncores 4
 ```
 
+## AWS Batch
+
+```bash
+export NAME=fpe-pii-batch
+export AWS_ACCOUNT=474916309046
+export AWS_REGION=us-east-1
+export AWS_REPO=${AWS_ACCOUNT}.dkr.ecr.${AWS_REGION}.amazonaws.com/${NAME}
+
+# log in
+aws ecr get-login-password --region ${AWS_REGION} | docker login --username AWS --password-stdin ${AWS_REPO}
+
+# build image (turn off VPN!)
+docker build -t ${AWS_REPO} .
+
+# build image (Mac M1)
+# ref: https://stackoverflow.com/questions/67361936/exec-user-process-caused-exec-format-error-in-aws-fargate-service
+docker buildx build --platform=linux/amd64 -t ${AWS_REPO} .
+
+# push to docker hub (turn on VPN!)
+docker push ${AWS_REPO}
+```
+
 ----
 
 ## MegaDetector (Amrita's Notes)
@@ -144,3 +166,5 @@ python detection/run_detector_batch.py "{FULL_PATH_TO_FPE-MODEL_REPO}/results/ch
 ```
 
 The detection results are in the JSON file specified in the third argument to the script.
+
+----
