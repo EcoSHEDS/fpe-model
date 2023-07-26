@@ -88,9 +88,9 @@ class FlowPhotoDataset(Dataset):
         filename = self.table.iloc[index][self.col_filename]
         image_path = os.path.join(
             self.data_dir,
-            # "images",
             filename,
-        )  # TODO: see if we can avoid secret subdirs
+        )
+        # print(image_path)
         try:
             image = read_image(image_path)
             image = image / 255.0  # convert to float in [0,1]

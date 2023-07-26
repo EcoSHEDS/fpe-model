@@ -158,11 +158,13 @@ def train_ranking_model(args):
     )
     train_ds.transform = image_transforms["train"]
     val_ds = FlowPhotoRankingDataset(
-        val_df, os.path.dirname(args.image_root_dir), transform=image_transforms["eval"]
+        val_df,
+        args.image_root_dir,
+        transform=image_transforms["eval"],
     )
     test_ds = FlowPhotoRankingDataset(
         test_df,
-        os.path.dirname(args.image_root_dir),
+        args.image_root_dir,
         transform=image_transforms["eval"],
     )
     # create ranked image pairs from ground truth

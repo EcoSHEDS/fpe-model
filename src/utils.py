@@ -5,6 +5,7 @@ import random
 import numpy as np
 import pandas as pd
 import torch
+from urllib.parse import urlparse
 from tqdm import tqdm
 from .losses import MSELoss, RankNetLoss
 
@@ -61,6 +62,8 @@ def next_path(path_pattern):
 
     return path_pattern % b
 
+def get_url_path(url):
+    return urlparse(url).path[1:]
 
 def set_seeds(seed, multigpu=False):
     random.seed(seed)
@@ -80,9 +83,10 @@ def set_seeds(seed, multigpu=False):
     # torch.backends.cudnn.deterministic = True # this might be slowing down training
 
 
-def load_data(data_file, col_timestamp="timestamp"):
+def load_data(data_file, col_timestamp="timestamp", col_filename="filename", col_url="url"):
     df = pd.read_csv(data_file)
     df[col_timestamp] = pd.to_datetime(df[col_timestamp])
+    df[col_filename] = df[col_url].apply(get_url_path)
     df.sort_values(by=col_timestamp, inplace=True, ignore_index=True)
     return df
 
