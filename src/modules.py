@@ -6,7 +6,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 from torchvision.models import resnet18, resnet50
-from .utils import get_output_shape
+from utils import get_output_shape
 
 
 class ResNet18(nn.Module):

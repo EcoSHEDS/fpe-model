@@ -7,7 +7,7 @@ import pandas as pd
 import torch
 from urllib.parse import urlparse
 from tqdm import tqdm
-from .losses import MSELoss, RankNetLoss
+from losses import MSELoss, RankNetLoss
 
 
 def log(log_file):
