@@ -109,11 +109,11 @@ class FlowPhotoDataset(Dataset):
             label = self.label_transform(label)
         return image, label
 
-    def compute_mean_std(self):
+    def compute_mean_std(self, n=1000):
         """Compute RGB channel means and stds for image samples in the dataset."""
         means = np.zeros((3))
         stds = np.zeros((3))
-        sample_size = min(len(self.table), 1000)
+        sample_size = min(len(self.table), n)
         sample_indices = np.random.choice(
             len(self.table), size=sample_size, replace=False
         )
