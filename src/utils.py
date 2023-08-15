@@ -387,3 +387,99 @@ def evaluate_accuracy(model, dl, device):
             total += labels.size(0)
             correct += (predicted == labels).sum().item()
     return 100 * correct / float(total)
+
+
+def parse_configargparse_args(params_file):
+    """Parse parameters and their values from a configargparse output file.
+
+    Args:
+        params_file (str): Path to the file containing the configargparse output.
+
+    Raises:
+        NotImplementedError: If the params file contains variables with more than one value.
+
+    Returns:
+        dict: A dictionary containing the parsed parameter values. The keys are the parameter names
+              without leading hyphens, converted to snake_case. The values are either the assigned
+              values or True for standalone flags.
+    """
+    with open(params_file, "r") as f:
+        lines = f.readlines()
+
+    # Find the line that marks the beginning of config file arguments
+    config_file_start = None
+    for i, line in enumerate(lines):
+        if line.startswith("Config File"):
+            config_file_start = i + 1
+            break
+
+    # Find the line that marks the beginning of default arguments
+    defaults_start = None
+    for i, line in enumerate(lines):
+        if line.startswith("Defaults:"):
+            defaults_start = i + 1
+            break
+
+    # Initialize the dictionary
+    parsed_values = {}
+
+    # Process the command line arguments
+    cmd_line_data = lines[0].strip("Command Line Args:").split()
+    i = 0
+    while i < len(cmd_line_data):
+        arg = cmd_line_data[i]
+        if arg.startswith("-"):
+            key = arg.lstrip("-").replace("-", "_")
+            if i + 1 < len(cmd_line_data) and not cmd_line_data[i + 1].startswith("-"):
+                value = cmd_line_data[i + 1]
+                parsed_values[key] = value
+                i += 2
+            else:
+                parsed_values[key] = True
+                i += 1
+        else:
+            i += 1
+
+    # Process config file and default arguments
+    if config_file_start is not None:
+        remaining_args = [
+            line
+            for line in lines[config_file_start:]
+            if line != lines[defaults_start - 1]
+        ]
+        for arg in remaining_args:
+            var_name, *var_val = arg.split()
+            if len(var_val) > 1:
+                raise NotImplementedError(
+                    "Params file parser currently only handles variables with 1 value (not lists)."
+                )
+            parsed_values[var_name[:-1].lstrip("-").replace("-", "_")] = var_val[0]
+
+    types = {
+        "c": str,
+        "site": str,
+        "data_file": str,
+        "image_root_dir": str,
+        "col_timestamp": str,
+        "output_root_dir": str,
+        "min_month": int,
+        "max_month": int,
+        "min_hour": int,
+        "max_hour": int,
+        "margin": float,
+        "margin_mode": str,
+        "num_train_pairs": int,
+        "num_eval_pairs": int,
+        "augment": bool,
+        "normalize": bool,
+        "epochs": int,
+        "batch_size": int,
+        "lr": float,
+        "warm_start_from_checkpoint": str,
+        "unfreeze_after": int,
+        "random_seed": int,
+        "gpu": int,
+    }
+    for key, val in parsed_values.items():
+        parsed_values[key] = types[key](val)
+    return parsed_values

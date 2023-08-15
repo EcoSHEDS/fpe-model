@@ -1,4 +1,5 @@
 import os
+import random
 from typing import Dict, Tuple
 import numpy as np
 import pandas as pd
@@ -233,7 +234,11 @@ class ImagePairSampler:
 
 def random_pairs(table, num_pairs):
     # each image is paired with another image at random
-    all_img_idx_combinations = list(combinations(range(len(table)), 2))
+    if len(table) > 14142:  # 14142 choose 2 = 99,991,011 (nearly 100M)
+        rows_to_sample = sorted(random.sample(range(len(table)), 14142))
+    else:
+        rows_to_sample = range(len(table))
+    all_img_idx_combinations = list(combinations(rows_to_sample, 2))
     num_combinations = len(all_img_idx_combinations)
     if len(all_img_idx_combinations) < num_pairs:
         combinations_sample = [

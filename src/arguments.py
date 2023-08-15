@@ -121,3 +121,16 @@ def add_model_training_args(parser):
         default=2,
         help="number of epochs after which to unfreeze model backbone",
     )
+    ckpt_group = group.add_mutually_exclusive_group()
+    ckpt_group.add_argument(
+        "--resume-from-checkpoint",
+        type=str,
+        default=None,
+        help="path to checkpoint from which to resume training",
+    )
+    ckpt_group.add_argument(
+        "--warm-start-from-checkpoint",
+        type=str,
+        default=None,
+        help="path to checkpoint from which to warm start training",
+    )

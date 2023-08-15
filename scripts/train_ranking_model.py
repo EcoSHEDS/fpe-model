@@ -154,7 +154,12 @@ def train_ranking_model(args):
     resize_shape = [480, np.int32(480 * aspect)]
     input_shape = [384, np.int32(384 * aspect)]
     image_transforms = create_image_transforms(
-        resize_shape, input_shape, means=img_sample_mean, stds=img_sample_std
+        resize_shape,
+        input_shape,
+        means=img_sample_mean,
+        stds=img_sample_std,
+        augmentation=args.augment,
+        normalization=args.normalize,
     )
     train_ds.transform = image_transforms["train"]
     val_ds = FlowPhotoRankingDataset(
@@ -233,7 +238,7 @@ def train_ranking_model(args):
     )
 
     # # # # # # # # # # # # # # # # # # # # # # # # #
-    # INITIALIZE MODEL
+    # INITIALIZE MODEL, LOSS, AND OPTIMIZER
     # # # # # # # # # # # # # # # # # # # # # # # # #
     if torch.cuda.is_available():
         device = torch.device(f"cuda:{args.gpu}")
@@ -247,10 +252,6 @@ def train_ranking_model(args):
         truncate=2,
         pretrained=True,
     )
-    # freeze the resnet backbone
-    for p in list(model.children())[0].parameters():
-        p.requires_grad = False
-    unfreeze_after = args.unfreeze_after
     model = torch.nn.DataParallel(
         model,
         device_ids=[
@@ -258,12 +259,42 @@ def train_ranking_model(args):
         ],
     )
     model.to(device)
-
-    # # # # # # # # # # # # # # # # # # # # # # # # #
-    # INITIALIZE LOSS, OPTIMIZER, LR SCHEDULER
-    # # # # # # # # # # # # # # # # # # # # # # # # #
     criterion = RankNetLoss()
     optimizer = torch.optim.SGD(model.parameters(), lr=args.lr, momentum=0.9)
+
+    # # # # # # # # # # # # # # # # # # # # # # # # #
+    # LOAD CHECKPOINT IF RESUMING TRAINING/FINE-TUNING
+    # # # # # # # # # # # # # # # # # # # # # # # # #
+    starting_epoch = 0
+    if args.resume_from_checkpoint or args.warm_start_from_checkpoint:
+        if args.resume_from_checkpoint:
+            checkpoint = torch.load(args.resume_from_checkpoint, map_location=device)
+        elif args.warm_start_from_checkpoint:
+            checkpoint = torch.load(
+                args.warm_start_from_checkpoint, map_location=device
+            )
+        model.load_state_dict(checkpoint["model_state_dict"])
+        if args.resume_from_checkpoint:
+            optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+            starting_epoch = checkpoint["epoch"] + 1
+        if args.resume_from_checkpoint:
+            args.logger.info(f"Loaded model from {args.resume_from_checkpoint}")
+        elif args.warm_start_from_checkpoint:
+            args.logger.info(
+                f"Loaded model from {args.warm_start_from_checkpoint} for warm start"
+            )
+
+    unfreeze_after = args.unfreeze_after
+    if starting_epoch < unfreeze_after:
+        # freeze the resnet backbone
+        for p in list(model.module.children())[0].parameters():
+            p.requires_grad = False
+
+    # assert False, "trying to figure out what is wrong"
+
+    # # # # # # # # # # # # # # # # # # # # # # # # #
+    # INITIALIZE LR SCHEDULER WITH OPTIMIZER
+    # # # # # # # # # # # # # # # # # # # # # # # # #
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
         optimizer, "min", patience=1, factor=0.5
     )
@@ -291,7 +322,7 @@ def train_ranking_model(args):
     # # # # # # # # # # # # # # # # # # # # # # # # #
     # TRAIN
     # # # # # # # # # # # # # # # # # # # # # # # # #
-    for epoch in range(0, args.epochs):
+    for epoch in range(starting_epoch, args.epochs):
         # train
         start_time = time.time()
         avg_loss_training = fit(
