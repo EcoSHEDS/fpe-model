@@ -272,6 +272,7 @@ def train(args):
     # # # # # # # # # # # # # # # # # # # # # # # # #
     # TRAIN
     # # # # # # # # # # # # # # # # # # # # # # # # #
+    min_test_loss = None
     for epoch in range(0, args.epochs):
         # train
         start_time = time.time()
@@ -310,9 +311,36 @@ def train(args):
                 "model_state_dict": model.state_dict(),
                 "optimizer_state_dict": optimizer.state_dict(),
                 "training_loss": avg_loss_training,
+                "params": {
+                    "aspect": aspect,
+                    "input_shape": input_shape,
+                    "img_sample_mean": img_sample_mean,
+                    "img_sample_std": img_sample_std
+                }
             },
             epoch_checkpoint_save_path,
         )
+
+        if (min_test_loss is None or testset_eval[0] < min_test_loss):
+            print(f"lowest test loss so far, saving to final destination (epoch={epoch})")
+
+            final_model_path = os.path.join(args.model_dir, "model.pth")
+            torch.save(
+                {
+                    "epoch": epoch,
+                    "model_state_dict": model.state_dict(),
+                    "optimizer_state_dict": optimizer.state_dict(),
+                    "training_loss": avg_loss_training,
+                    "params": {
+                        "aspect": aspect,
+                        "input_shape": input_shape,
+                        "img_sample_mean": img_sample_mean,
+                        "img_sample_std": img_sample_std
+                    }
+                },
+                final_model_path,
+            )
+
         metrics_checkpoint_file = "metrics_per_epoch_" + paramstr + ".json"
         metrics_checkpoint_save_path = os.path.join(
             output_data_dir, metrics_checkpoint_file
@@ -331,19 +359,6 @@ def train(args):
     metrics_save_path = os.path.join(output_data_dir, metrics_file)
     with open(metrics_save_path, "wb") as f:
         pickle.dump(metriclogs, f, protocol=pickle.HIGHEST_PROTOCOL)
-
-    # save final model
-    final_model_path = os.path.join(args.model_dir, "model.pt")
-    torch.save(
-        {
-            "epoch": epoch,
-            "model_state_dict": model.state_dict(),
-            "optimizer_state_dict": optimizer.state_dict(),
-            "training_loss": avg_loss_training,
-        },
-        final_model_path,
-    )
-    
     print("finished")
 
 
@@ -379,7 +394,7 @@ if __name__ == "__main__":
         help="number of epochs after which to unfreeze model backbone",
     )
     parser.add_argument("--random-seed", type=int, default=1691, help="random seed")
-    
+
     parser.add_argument(
         "--margin-mode",
         type=str,
