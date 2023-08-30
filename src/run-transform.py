@@ -17,13 +17,15 @@ print(f"loading checkpoint: {model_file}")
 with open(model_file, "rb") as f:
     checkpoint = torch.load(f, map_location=device)
     params = checkpoint["params"]
-    print("params")
-    print(params)
     model = ResNetRankNet(
         input_shape=(3, checkpoint["params"]["input_shape"][0], checkpoint["params"]["input_shape"][1]),
         resnet_size=18,
         truncate=2,
         pretrained=True,
+    )
+    model = torch.nn.DataParallel(
+        model,
+        device_ids=[],
     )
     model.load_state_dict(checkpoint["model_state_dict"])
     model.params = params

@@ -224,6 +224,7 @@ def train(args):
         print("Using CPU to train.")
     model = ResNetRankNet(
         input_shape=(3, input_shape[0], input_shape[1]),
+        transforms=image_transforms,
         resnet_size=18,
         truncate=2,
         pretrained=True,

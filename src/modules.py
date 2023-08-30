@@ -57,6 +57,7 @@ class ResNetRegressionNet(nn.Module):
     def __init__(
         self,
         input_shape=(3, 384, 512),
+        transforms=[],
         resnet_size=50,
         truncate=2,
         pretrained=True,
@@ -67,11 +68,12 @@ class ResNetRegressionNet(nn.Module):
         self.input_nchannels = input_shape[0]
         self.input_height = input_shape[1]
         self.input_width = input_shape[2]
+        self.transforms = transforms
 
         if resnet_size == 50:
-            self.resnetbody = ResNet50(pretrained=True, truncate=truncate)
+            self.resnetbody = ResNet50(pretrained=pretrained, truncate=truncate)
         elif resnet_size == 18:
-            self.resnetbody = ResNet18(pretrained=True, truncate=truncate)
+            self.resnetbody = ResNet18(pretrained=pretrained, truncate=truncate)
         else:
             raise ValueError("Only resnet_size 50 or 18 are supported.")
         num_filters = get_output_shape(self.resnetbody, input_shape=(1, *input_shape))[
@@ -104,6 +106,7 @@ class ResNetRankNet(ResNetRegressionNet):
     def __init__(
         self,
         input_shape=(3, 384, 512),
+        transforms=[],
         resnet_size=50,
         truncate=2,
         pretrained=True,
@@ -111,6 +114,7 @@ class ResNetRankNet(ResNetRegressionNet):
     ):
         super().__init__(
             input_shape=input_shape,
+            transforms=transforms,
             resnet_size=resnet_size,
             truncate=truncate,
             pretrained=pretrained,

@@ -21,17 +21,20 @@ def model_fn(model_dir):
         checkpoint = torch.load(f, map_location=device)
         params = checkpoint["params"]
         model = ResNetRankNet(
-            input_shape=(3, checkpoint["params"]["input_shape"][0], checkpoint["params"]["input_shape"][1]),
+            input_shape=(3, params["input_shape"][0], params["input_shape"][1]),
             resnet_size=18,
             truncate=2,
             pretrained=True,
         )
+        model = torch.nn.DataParallel(
+            model,
+            device_ids=[],
+        )
         model.load_state_dict(checkpoint["model_state_dict"])
-        model.params = params
         print("model loaded from checkpoint")
 
     model.eval()
-    model.to(device)
+    return model.to(device)
 
 def load_from_bytearray(request_body):
     image_as_bytes = io.BytesIO(request_body)
@@ -43,8 +46,6 @@ def load_from_bytearray(request_body):
 def input_fn(request_body, request_content_type):
     # if set content_type as "image/jpg" or "application/x-npy",
     # the input is also a python bytearray
-    print("input_fn(): params")
-    print(params)
     if request_content_type == "image/jpg":
         image_tensor = load_from_bytearray(request_body)
     else:
@@ -55,9 +56,7 @@ def input_fn(request_body, request_content_type):
 
 # Perform prediction on the deserialized object, with the loaded model
 def predict_fn(input_object, model):
-    print("predict_fn(): model.params")
-    print(model.params)
-    output = model.module.forward(input_object)
+    output = model.module.forward_single(input_object)
     pred = output.detach().cpu().numpy()
 
     return {"score": pred.item()}
