@@ -4,10 +4,10 @@ import time
 import random
 import numpy as np
 import pandas as pd
-import torch
 from urllib.parse import urlparse
 from tqdm import tqdm
 from losses import MSELoss, RankNetLoss
+import torch
 
 
 def log(log_file):

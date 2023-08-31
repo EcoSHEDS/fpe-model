@@ -2,7 +2,6 @@ import argparse
 import ast
 import os
 import time
-import torch
 import json
 import pickle
 from functools import reduce
@@ -302,7 +301,7 @@ def train(args):
         scheduler.step(valset_eval[0])
 
         # periodically save model checkpoints and metrics
-        epoch_checkpoint_file = "./epoch%d_" % epoch + paramstr + ".ckpt"
+        epoch_checkpoint_file = "./epoch_%02d" % epoch + ".pth"
         epoch_checkpoint_save_path = os.path.join(
             args.checkpoint_dir, epoch_checkpoint_file
         )
@@ -312,6 +311,7 @@ def train(args):
                 "model_state_dict": model.state_dict(),
                 "optimizer_state_dict": optimizer.state_dict(),
                 "training_loss": avg_loss_training,
+                "transforms": image_transforms,
                 "params": {
                     "aspect": aspect,
                     "input_shape": input_shape,
@@ -332,6 +332,7 @@ def train(args):
                     "model_state_dict": model.state_dict(),
                     "optimizer_state_dict": optimizer.state_dict(),
                     "training_loss": avg_loss_training,
+                    "transforms": image_transforms,
                     "params": {
                         "aspect": aspect,
                         "input_shape": input_shape,
@@ -422,13 +423,7 @@ if __name__ == "__main__":
         default=1000,
         help="number of labeled image pairs on which to evaluate model",
     )
-
-    parser.add_argument(
-        "--site",
-        type=str,
-        required=True,
-        help="name of site with linked images and flows",
-    )
+    
     parser.add_argument(
         "--data-file",
         type=str,
