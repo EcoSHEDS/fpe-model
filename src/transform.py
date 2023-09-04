@@ -100,7 +100,7 @@ if __name__ == "__main__":
     # parser.add_argument("--current-host", type=str, default=os.environ["SM_CURRENT_HOST"])
     parser.add_argument("--model-dir", type=str, default=os.environ["SM_MODEL_DIR"])
     # parser.add_argument("--checkpoint-dir", type=str, default="/opt/ml/checkpoints")
-    # parser.add_argument("--output-dir", type=str, default=os.environ["SM_OUTPUT_DIR"])
+    parser.add_argument("--output-dir", type=str, default=os.environ["SM_OUTPUT_DIR"])
     parser.add_argument("--images-dir", type=str, default=os.environ["SM_CHANNEL_IMAGES"])
     parser.add_argument("--values-dir", type=str, default=os.environ["SM_CHANNEL_VALUES"])
     parser.add_argument(
@@ -112,4 +112,6 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
     results = transform(args)
-    print(results["score"])
+    output_file = os.path.join(args.output_dir, "data", "predictions.csv")
+    print(f"saving predictions: {output_file}")
+    results.to_csv(os.path.join(output_file))
