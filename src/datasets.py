@@ -169,15 +169,83 @@ class FlowPhotoRankingDataset(FlowPhotoDataset):
             label = self.label_transform(label)
         return image1, image2, label
 
+    def annotate_image_pairs(self, annotations, num_pairs):
+        """Annotate image pairs with human labeler annotations.
+
+        Args:
+            annotations (_type_): _description_
+            num_pairs (_type_): _description_
+        """
+        annotated_pairs = []
+        for _, ann in annotations.iterrows():
+            l_image_id = ann["left.url"]
+            r_image_id = ann["right.url"]
+            if len(self.table[self.table["url"] == l_image_id]) != 1:
+                continue
+                # raise ValueError(f"Unexpected number of rows for url {l_image_id}")
+            if len(self.table[self.table["url"] == r_image_id]) != 1:
+                continue
+                # raise ValueError(f"Unexpected number of rows for url {r_image_id}")
+
+            l_image_idx = self.table.index.get_loc(
+                self.table[self.table["url"] == l_image_id].index[0]
+            )
+            r_image_idx = self.table.index.get_loc(
+                self.table[self.table["url"] == r_image_id].index[0]
+            )
+            raw_label = ann["rank"]
+            if raw_label == "LEFT":
+                label = 1
+                annotated_pairs.extend([(l_image_idx, r_image_idx, label)])
+            elif raw_label == "RIGHT":
+                label = -1
+                annotated_pairs.extend([(l_image_idx, r_image_idx, label)])
+            elif raw_label == "SAME":
+                label = 0
+                annotated_pairs.extend([(l_image_idx, r_image_idx, label)])
+
+        if len(annotated_pairs) < num_pairs:
+            print("WARNING: not enough annotated pairs to meet num_pairs")
+        elif len(annotated_pairs) >= num_pairs:
+            annotated_pairs_sample = [
+                annotated_pairs[i]
+                for i in np.random.choice(
+                    range(len(annotated_pairs)), num_pairs, replace=False
+                )
+            ]
+            annotated_pairs = annotated_pairs_sample
+        annotated_pairs.extend([(p[1], p[0], -1 * p[2]) for p in annotated_pairs])
+        self.ranked_image_pairs.extend(annotated_pairs)
+
     def rank_image_pairs(self, pair_sampling_fn, num_pairs, margin=0, mode="relative"):
+        """Rank image pairs using a simulated oracle.
+
+        This procedure comprises two stages. The first stage is to sample
+        image pairs from the dataset. The second stage is to label the image
+        pairs as a simulated oracle would.
+        """
         self.image_pair_sampler = ImagePairSampler(self.table, pair_sampling_fn)
         self.sampled_image_pairs = self.image_pair_sampler.get_pairs(num_pairs)
         labeled_sampled_image_pairs = self.label_image_pairs(
             self.sampled_image_pairs, margin=margin, mode=mode
         )
+
         self.ranked_image_pairs.extend(labeled_sampled_image_pairs)
 
     def label_image_pairs(self, image_pairs, margin, mode="relative"):
+        """Label image pairs as oracle.
+
+        Args:
+            image_pairs (_type_): _description_
+            margin (_type_): _description_
+            mode (str, optional): _description_. Defaults to "relative".
+
+        Raises:
+            NotImplementedError: _description_
+
+        Returns:
+            _type_: _description_
+        """
         labeled_ranked_image_pairs = []
         for i in range(len(image_pairs)):
             idx1 = image_pairs[i][0]
@@ -381,58 +449,72 @@ class DatasetSplitter(object):
         }
 
 
-class RandomStratifiedWeeklyFlow(DatasetSplitter):
-    def split(self, dataset, frac_train, frac_val, frac_test, seed=1) -> Dict:
+class RandomStratifiedWindowFlow(DatasetSplitter):
+    def split(
+        self, dataset, frac_train, frac_val, frac_test, seed=1, window="week"
+    ) -> Dict:
         np.testing.assert_almost_equal(frac_train + frac_val + frac_test, 1.0)
 
         df = dataset.copy()
         df.sort_values(by="timestamp", inplace=True, ignore_index=True)
-        df["week"] = df["timestamp"].dt.isocalendar().week
+        if window == "week":
+            df["window"] = df["timestamp"].dt.isocalendar().week
+        elif window == "day":
+            df["window"] = df["timestamp"].dt.day
+        else:
+            raise ValueError(
+                "Window must be 'week' or 'day'. Other windows not yet supported."
+            )
         df["year"] = df["timestamp"].dt.isocalendar().year
 
-        weekly_flow_means = (
-            df[["flow_cfs", "year", "week"]]
-            .groupby(["year", "week"])
+        window_flow_means = (
+            df[["flow_cfs", "year", "window"]]
+            .groupby(["year", "window"])
             .mean()
             .rename(columns={"flow_cfs": "mean_flow_cfs"})
         )
-        weekly_flow_quantiles = np.quantile(
-            weekly_flow_means["mean_flow_cfs"].values, [0.25, 0.75], axis=0
+        # for sites with no flow data, randomly assign a flow value
+        if np.all(np.isnan(window_flow_means["mean_flow_cfs"].values)):
+            window_flow_means["mean_flow_cfs"] = np.random.uniform(
+                0, 1, len(window_flow_means)
+            )
+        window_flow_quantiles = np.quantile(
+            window_flow_means["mean_flow_cfs"].values, [0.25, 0.75], axis=0
         )
-        weekly_flow_means["flow_class"] = weekly_flow_means["mean_flow_cfs"].map(
-            lambda x: classify3(weekly_flow_quantiles[0], weekly_flow_quantiles[1], x)
+        window_flow_means["flow_class"] = window_flow_means["mean_flow_cfs"].map(
+            lambda x: classify3(window_flow_quantiles[0], window_flow_quantiles[1], x)
         )
-        weekly_flow_means["week_index"] = range(len(weekly_flow_means.index))
+        window_flow_means["window_index"] = range(len(window_flow_means.index))
 
         df = (
-            df.set_index(["year", "week"])
-            .join(weekly_flow_means, on=["year", "week"])
+            df.set_index(["year", "window"])
+            .join(window_flow_means, on=["year", "window"])
             .reset_index()
         )
-        weeks = weekly_flow_means.reset_index()
+        windows = window_flow_means.reset_index()
 
-        X = weeks["week_index"]
-        y = weeks["flow_class"]
+        X = windows["window_index"]
+        y = windows["flow_class"]
         sss = StratifiedShuffleSplit(n_splits=1, test_size=frac_test, random_state=seed)
-        week_idx_train_val, week_idx_test = list(sss.split(X, y))[0]
-        X_trv = [X[i] for i in sorted(week_idx_train_val)]
-        X_t = [X[i] for i in sorted(week_idx_test)]
-        y_trv = [y[i] for i in sorted(week_idx_train_val)]
-        # y_t = [y[i] for i in sorted(week_idx_test)]
+        window_idx_train_val, window_idx_test = list(sss.split(X, y))[0]
+        X_trv = [X[i] for i in sorted(window_idx_train_val)]
+        X_t = [X[i] for i in sorted(window_idx_test)]
+        y_trv = [y[i] for i in sorted(window_idx_train_val)]
+        # y_t = [y[i] for i in sorted(window_idx_test)]
 
         rescaled_frac_val = frac_val / (1 - frac_test)
         sss_trv = StratifiedShuffleSplit(
             n_splits=1, test_size=rescaled_frac_val, random_state=seed + 1
         )
-        week_idx_train, week_idx_val = list(sss_trv.split(X_trv, y_trv))[0]
-        X_tr = [X_trv[i] for i in sorted(week_idx_train)]
-        X_v = [X_trv[i] for i in sorted(week_idx_val)]
-        # y_tr = [y_trv[i] for i in sorted(week_idx_train)]
-        # y_v = [y_trv[i] for i in sorted(week_idx_val)]
+        window_idx_train, window_idx_val = list(sss_trv.split(X_trv, y_trv))[0]
+        X_tr = [X_trv[i] for i in sorted(window_idx_train)]
+        X_v = [X_trv[i] for i in sorted(window_idx_val)]
+        # y_tr = [y_trv[i] for i in sorted(window_idx_train)]
+        # y_v = [y_trv[i] for i in sorted(window_idx_val)]
 
-        train_inds = np.where(df.week_index.isin(X_tr))[0]
-        val_inds = np.where(df.week_index.isin(X_v))[0]
-        test_inds = np.where(df.week_index.isin(X_t))[0]
+        train_inds = np.where(df.window_index.isin(X_tr))[0]
+        val_inds = np.where(df.window_index.isin(X_v))[0]
+        test_inds = np.where(df.window_index.isin(X_t))[0]
         return {
             "train": df.iloc[train_inds],
             "val": df.iloc[val_inds],

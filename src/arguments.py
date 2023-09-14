@@ -103,6 +103,12 @@ def add_ranking_data_args(parser):
         default=1000,
         help="number of labeled image pairs on which to evaluate model",
     )
+    group.add_argument(
+        "--annotations",
+        type=str,
+        default=None,
+        help="path to CSV file with annotations for ranking model training",
+    )
 
 
 # MODEL TRAINING ARGS
