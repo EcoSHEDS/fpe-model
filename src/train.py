@@ -3,9 +3,7 @@ import ast
 import os
 import time
 import json
-from functools import reduce
 import numpy as np
-import pandas as pd
 import torch
 import torch.nn
 import torch.utils.data
@@ -19,21 +17,15 @@ from torchvision.transforms import (
     Normalize,
     Compose,
 )
-from arguments import add_data_args, add_ranking_data_args, add_model_training_args
 from utils import (
-    log,
-    next_path,
     set_seeds,
-    load_data,
-    filter_by_hour,
-    filter_by_month,
+    load_pairs,
     fit,
     validate,
 )
 from datasets import (
-    RandomStratifiedWindowFlow,
     FlowPhotoRankingDataset,
-    random_pairs,
+    FlowPhotoRankingPairsDataset,
 )
 from modules import ResNetRankNet
 from losses import RankNetLoss
@@ -67,25 +59,26 @@ def create_image_transforms(
             RandomHorizontalFlip(),
             RandomRotation(10),
             ColorJitter(),
-        ]  # type: ignore
+        ]
     ) if augmentation else image_transforms["train"].append(
-        CenterCrop(input_shape)  # type: ignore
-    )  # type: ignore
-    image_transforms["eval"].append(CenterCrop(input_shape))  # type: ignore
+        CenterCrop(input_shape)
+    )
+    image_transforms["eval"].append(CenterCrop(input_shape))
 
     # normalization
     if normalization:
-        image_transforms["train"].append(Normalize(means, stds))  # type: ignore
-        image_transforms["eval"].append(Normalize(means, stds))  # type: ignore
+        image_transforms["train"].append(Normalize(means, stds))
+        image_transforms["eval"].append(Normalize(means, stds))
 
     # composition
-    image_transforms["train"] = Compose(image_transforms["train"])  # type: ignore
-    image_transforms["eval"] = Compose(image_transforms["eval"])  # type: ignore
+    image_transforms["train"] = Compose(image_transforms["train"])
+    image_transforms["eval"] = Compose(image_transforms["eval"])
     return image_transforms
 
 def train(args):
     print("train()")
-    print(args)
+    print("args:")
+    print(args.__dict__)
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print("device: {}".format(device))
@@ -106,31 +99,25 @@ def train(args):
 
     print(f"model_dir: {args.model_dir}")
 
+    print(f"set seeds ({args.random_seed})")
     set_seeds(args.random_seed)
 
-    print("set seed")
-    set_seeds(args.random_seed)
+    print("loading pairs from csv files")
+    train_df = load_pairs(os.path.join(args.values_dir, "pairs-train.csv"))
+    val_df = load_pairs(os.path.join(args.values_dir, "pairs-val.csv"))
+    test_df = load_pairs(os.path.join(args.values_dir, "pairs-test.csv"))
 
-    print("loading data file")
-    data_filepath = os.path.join(args.values_dir, args.data_file)
-    df = load_data(data_filepath)
-    try:
-        splits = RandomStratifiedWindowFlow().split(df, 0.8, 0.1, 0.1)
-    except ValueError:
-        splits = RandomStratifiedWindowFlow().split(df, 0.8, 0.1, 0.1, window="day")
-    train_df, val_df, test_df = splits["train"], splits["val"], splits["test"]
-
-    # save the train/val/test splits
-    train_df.to_csv(os.path.join(output_data_dir, "train_data.csv"))
-    val_df.to_csv(os.path.join(output_data_dir, "val_data.csv"))
-    test_df.to_csv(os.path.join(output_data_dir, "test_data.csv"))
-
-    train_ds = FlowPhotoRankingDataset(train_df, args.images_dir)
+    print("creating train dataset")
+    train_ds = FlowPhotoRankingPairsDataset(
+        train_df,
+        args.images_dir,
+    )
+    print("computing image stats")
     img_sample_mean, img_sample_std = train_ds.compute_mean_std(args.num_image_stats)
-    print(f"image channelwise means: {img_sample_mean}")
-    print(f"image channelwise stdevs: {img_sample_std}")
-
-    image = train_ds.get_image(0)
+    print(f"img_sample_mean: {img_sample_mean}")
+    print(f"img_sample_std: {img_sample_std}")
+    pair = train_ds.get_pair(0)
+    image = train_ds.get_image(pair["filename1"])
     aspect = image.shape[2] / image.shape[1]
     resize_shape = [480, np.int32(480 * aspect)]
     input_shape = [384, np.int32(384 * aspect)]
@@ -143,6 +130,7 @@ def train(args):
         normalization=args.normalize,
     )
     train_ds.transform = image_transforms["train"]
+    print("creating val/test datasets")
     val_ds = FlowPhotoRankingDataset(
         val_df,
         args.images_dir,
@@ -154,99 +142,7 @@ def train(args):
         transform=image_transforms["eval"],
     )
 
-    if args.annotations is not None:
-        # create ranked image pairs from annotations file
-        annotations = pd.read_csv(args.annotations)
-        args.logger.info(
-            "Loaded %d annotations from %s" % (len(annotations), args.annotations)
-        )
-
-        # filter annotations by which images are in the train/val/test data splits
-        train_ds.annotate_image_pairs(annotations, args.num_train_pairs)
-        val_ds.annotate_image_pairs(annotations, args.num_eval_pairs)
-        test_ds.annotate_image_pairs(annotations, args.num_eval_pairs)
-
-        # # split annotations directly into train/val/test (but data cannot be split)
-        # splits = DatasetSplitter().split(annotations, 0.8, 0.1, 0.1)
-        # train_ann, val_ann, test_ann = splits["train"], splits["val"], splits["test"]
-        # train_ds.annotate_image_pairs(train_ann, args.num_train_pairs)
-        # val_ds.annotate_image_pairs(val_ann, args.num_eval_pairs)
-        # test_ds.annotate_image_pairs(test_ann, args.num_eval_pairs)
-
-        args.logger.info(
-            "%d annotations fall in the train set"
-            % (
-                len(train_ds.ranked_image_pairs) / 2
-            )  # flipping pairs doubles ranked_image_pairs size
-        )
-        args.logger.info(
-            "%d annotations fall in the val set"
-            % (
-                len(val_ds.ranked_image_pairs) / 2
-            )  # flipping pairs doubles ranked_image_pairs size
-        )
-        args.logger.info(
-            "%d annotations fall in the test set"
-            % (
-                len(test_ds.ranked_image_pairs) / 2
-            )  # flipping pairs doubles ranked_image_pairs size
-        )
-
-    else:
-        # create ranked image pairs from ground truth
-        train_ds.rank_image_pairs(
-            random_pairs,
-            args.num_train_pairs,
-            args.margin,
-            args.margin_mode
-        )
-        val_ds.rank_image_pairs(
-            random_pairs,
-            args.num_eval_pairs,
-            args.margin,
-            args.margin_mode
-        )
-        test_ds.rank_image_pairs(
-            random_pairs,
-            args.num_eval_pairs,
-            args.margin,
-            args.margin_mode
-        )
-        # save the train/val/test ranked image pairs
-        train_pairs = [
-            {
-                "idx1": idx1,
-                "idx2": idx2,
-                "fn1": train_ds.table.iloc[idx1][train_ds.col_filename],
-                "fn2": train_ds.table.iloc[idx2][train_ds.col_filename],
-                "label": label,
-            }
-            for idx1, idx2, label in train_ds.ranked_image_pairs
-        ]
-        pd.DataFrame(train_pairs).to_csv(os.path.join(output_data_dir, "train_pairs.csv"))
-        val_pairs = [
-            {
-                "idx1": idx1,
-                "idx2": idx2,
-                "fn1": val_ds.table.iloc[idx1][val_ds.col_filename],
-                "fn2": val_ds.table.iloc[idx2][val_ds.col_filename],
-                "label": label,
-            }
-            for idx1, idx2, label in val_ds.ranked_image_pairs
-        ]
-        pd.DataFrame(val_pairs).to_csv(os.path.join(output_data_dir, "val_pairs.csv"))
-        test_pairs = [
-            {
-                "idx1": idx1,
-                "idx2": idx2,
-                "fn1": test_ds.table.iloc[idx1][test_ds.col_filename],
-                "fn2": test_ds.table.iloc[idx2][test_ds.col_filename],
-                "label": label,
-            }
-            for idx1, idx2, label in test_ds.ranked_image_pairs
-        ]
-        pd.DataFrame(test_pairs).to_csv(os.path.join(output_data_dir, "test_pairs.csv"))
-
+    print("creating data loaders")
     # TODO: do we need worker_init_fn here for reproducibility?
     train_dl = torch.utils.data.DataLoader(
         train_ds, batch_size=args.batch_size, shuffle=True, num_workers=4
@@ -261,12 +157,13 @@ def train(args):
     # # # # # # # # # # # # # # # # # # # # # # # # #
     # INITIALIZE MODEL
     # # # # # # # # # # # # # # # # # # # # # # # # #
+    print("initializing model")
     if torch.cuda.is_available():
         device = torch.device(f"cuda:{args.gpu}")
-        print(f"Using GPU {args.gpu} to train.")
+        print(f"using GPU {args.gpu} to train")
     else:
         device = torch.device("cpu")
-        print("Using CPU to train.")
+        print("using CPU to train")
     model = ResNetRankNet(
         input_shape=(3, input_shape[0], input_shape[1]),
         transforms=image_transforms,
@@ -276,9 +173,7 @@ def train(args):
     )
     model = torch.nn.DataParallel(
         model,
-        device_ids=[
-            args.gpu,
-        ],
+        device_ids=[args.gpu,],
     )
     model.to(device)
 
@@ -312,6 +207,7 @@ def train(args):
     # # # # # # # # # # # # # # # # # # # # # # # # #
     # TRAIN
     # # # # # # # # # # # # # # # # # # # # # # # # #
+    print("start training")
     min_val_loss = None
     for epoch in range(0, args.epochs):
         # train
@@ -408,12 +304,7 @@ def save_model(model, model_dir):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
 
-    # parser.add_argument(
-    #     "--custom", type=str, default="streamflow", help="dummy custom argument"
-    # )
-
-    # The parameters below retrieve their default values from SageMaker environment variables, which are
-    # instantiated by the SageMaker containers framework.
+    # SageMaker parameters
     # https://github.com/aws/sagemaker-containers#how-a-script-is-executed-inside-the-container
     parser.add_argument("--hosts", type=str, default=ast.literal_eval(os.environ["SM_HOSTS"]))
     parser.add_argument("--current-host", type=str, default=os.environ["SM_CURRENT_HOST"])
@@ -424,6 +315,7 @@ if __name__ == "__main__":
     parser.add_argument("--values-dir", type=str, default=os.environ["SM_CHANNEL_VALUES"])
     parser.add_argument("--num-gpus", type=int, default=os.environ["SM_NUM_GPUS"])
 
+    # hyperparameters
     parser.add_argument("--gpu", type=int, default=0, help="index of the GPU to use")
     parser.add_argument("--epochs", type=int, default=15, help="number of epochs")
     parser.add_argument("--lr", type=float, default=0.001, help="learning rate")
@@ -431,67 +323,41 @@ if __name__ == "__main__":
         "--unfreeze-after", type=int, default=2,
         help="number of epochs after which to unfreeze model backbone",
     )
-    parser.add_argument("--random-seed", type=int, default=1691, help="random seed")
-
     parser.add_argument(
-        "--margin-mode",
-        type=str,
-        default="relative",
-        choices=["relative", "absolute"],
-        help="type of comparison made by simulated oracle makes of flows in a pair of images",
+        "--batch-size", type=int, default=64,
+        help="batch size of the train loader"
     )
-    parser.add_argument("--margin", type=float, default=0.1)
     parser.add_argument(
-        "--num-image-stats",
-        type=int,
-        default=1000,
+        "--random-seed", type=int, default=1691,
+        help="random seed"
+    )
+
+    # transforms
+    parser.add_argument(
+        "--num-image-stats", type=int, default=1000,
         help="number of images to compute mean/stdev",
     )
     parser.add_argument(
-        "--num-train-pairs",
-        type=int,
-        default=5000,
-        help="number of labeled image pairs on which to train model",
-    )
-    parser.add_argument(
-        "--num-eval-pairs",
-        type=int,
-        default=1000,
-        help="number of labeled image pairs on which to evaluate model",
-    )
-    parser.add_argument(
-        "--annotations",
-        type=str,
-        default=None,
-        help="path to CSV file with annotations for ranking model training",
-    )
-
-    parser.add_argument(
-        "--data-file",
-        type=str,
-        default="flow-images.csv",
-        help="filename of CSV file with linked images and flows",
-    )
-    parser.add_argument(
-        "--col-timestamp",
-        type=str,
-        default="timestamp",
-        help="datetime column name in data-file",
-    )
-    parser.add_argument(
-        "--normalize",
-        type=bool,
-        default=True,
+        "--normalize", type=bool, default=True,
         help="whether to normalize image inputs to model",
     )
     parser.add_argument(
-        "--augment",
-        type=bool,
-        default=True,
+        "--augment", type=bool, default=True,
         help="whether to use image augmentation during training",
     )
+
+    # input files
     parser.add_argument(
-        "--batch-size", type=int, default=64, help="batch size of the train loader"
+        "--file-train", type=str, default="pairs-train.csv",
+        help="filename of CSV file with pairs for train split",
+    )
+    parser.add_argument(
+        "--file-val", type=str, default="pairs-val.csv",
+        help="filename of CSV file with pairs for val split",
+    )
+    parser.add_argument(
+        "--file-test", type=str, default="pairs-test.csv",
+        help="filename of CSV file with pairs for test split",
     )
 
     train(parser.parse_args())

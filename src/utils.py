@@ -90,6 +90,11 @@ def load_data(data_file, col_timestamp="timestamp", col_filename="filename", col
     df.sort_values(by=col_timestamp, inplace=True, ignore_index=True)
     return df
 
+def load_pairs(data_file):
+    df = pd.read_csv(data_file)
+    df['timestamp_1'] = pd.to_datetime(df['timestamp_1'])
+    df['timestamp_2'] = pd.to_datetime(df['timestamp_2'])
+    return df
 
 def convert_tz(df, tz: str, datetime_col: str = "timestamp"):
     """Convert a column in a DataFrame from one time zone to another.

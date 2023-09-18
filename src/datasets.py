@@ -10,56 +10,14 @@ from torchvision.io import read_image
 from tqdm import tqdm
 from sklearn.model_selection import StratifiedShuffleSplit
 
-
-# class FlowPhotoTable(object):
-#     def __init__(
-#         self,
-#         filepath,
-#         image_dir,
-#         col_image="filename",
-#         col_flow="flow_cfs",
-#         col_timestamp="timestamp",
-#         tz=None,
-#     ):
-#         self.data = pd.read_csv(filepath, dtype={col_flow: np.float32})
-#         self.data[col_timestamp] = pd.to_datetime(self.data[col_timestamp])
-#         self.image_dir = image_dir
-#         self.col_image = col_image
-#         self.col_flow = col_flow
-#         self.col_timestamp = col_timestamp
-#         self.tz = tz
-#         if self.tz:
-#             self.data[col_timestamp] = self.data[col_timestamp].dt.tz_convert(tz=tz)
-
-#     def filter_by_hour(self, min_hour=7, max_hour=18):
-#         self.data = self.data[
-#             self.data[self.col_timestamp].dt.hour.between(min_hour, max_hour)
-#         ]
-
-#     def filter_by_month(self, min_month=4, max_month=11):
-#         self.data = self.data[
-#             self.data[self.col_timestamp].dt.month.between(min_month, max_month)
-#         ]
-
-#     def filter_by_date(self, start_date, end_date, mode="exclude"):
-#         if mode == "exclude":
-#             before_start_date = self.data[self.col_timestamp] < start_date
-#             after_end_date = self.data[self.col_timestamp] > end_date
-#             outside_two_dates = before_start_date | after_end_date
-#             filtered_dates = self.data.loc[outside_two_dates].copy()
-#             self.data = filtered_dates
-#         else:
-#             raise NotImplementedError(
-#                 'Please select "exclude" mode and provide date range to exclude.'
-#             )
-
-
 class FlowPhotoDataset(Dataset):
     """_summary_
 
     Args:
         table (_type_): _description_
         data_dir (_type_): _description_
+        col_image_id (_type_): _description_
+        col_timestamp (_type_): _description_
         col_filename (_type_): _description_
         col_label (_type_): _description_
         transform (_type_): _description_
@@ -70,6 +28,8 @@ class FlowPhotoDataset(Dataset):
         self,
         table,
         data_dir,
+        col_image_id="image_id",
+        col_timestamp="timestamp",
         col_filename="filename",
         col_label="flow_cfs",
         transform=None,
@@ -77,8 +37,12 @@ class FlowPhotoDataset(Dataset):
     ) -> None:
         self.table = table
         self.data_dir = data_dir
-        self.col_filename = col_filename
-        self.col_label = col_label
+        self.cols = {
+            "filename": col_filename,
+            "label": col_label,
+            "timestamp": col_timestamp,
+            "image_id": col_image_id,
+        }
         self.transform = transform
         self.label_transform = label_transform
 
@@ -86,7 +50,7 @@ class FlowPhotoDataset(Dataset):
         return len(self.table)
 
     def get_image(self, index):
-        filename = self.table.iloc[index][self.col_filename]
+        filename = self.table.iloc[index][self.cols["filename"]]
         image_path = os.path.join(
             self.data_dir,
             filename,
@@ -101,7 +65,7 @@ class FlowPhotoDataset(Dataset):
 
     def __getitem__(self, index) -> Tuple:
         image = self.get_image(index)
-        label = self.table.iloc[index][self.col_label]
+        label = self.table.iloc[index][self.cols["label"]]
         if self.transform:
             image = self.transform(
                 image
@@ -139,13 +103,15 @@ class FlowPhotoRankingDataset(FlowPhotoDataset):
         self,
         table,
         data_dir,
+        col_image_id="image_id",
+        col_timestamp="timestamp",
         col_filename="filename",
         col_label="flow_cfs",
         transform=None,
         label_transform=None,
     ) -> None:
         super().__init__(
-            table, data_dir, col_filename, col_label, transform, label_transform
+            table, data_dir, col_image_id, col_timestamp, col_filename, col_label, transform, label_transform
         )
         self.image_pair_sampler = None
         self.ranked_image_pairs = []
@@ -252,14 +218,14 @@ class FlowPhotoRankingDataset(FlowPhotoDataset):
             idx2 = image_pairs[i][1]
             if mode == "absolute":
                 if (
-                    self.table[self.col_label].iloc[idx1]
-                    - self.table[self.col_label].iloc[idx2]
+                    self.table[self.cols["label"]].iloc[idx1]
+                    - self.table[self.cols["label"]].iloc[idx2]
                 ) > margin:
                     # first idx has higher discharge
                     label = 1
                 elif (
-                    self.table[self.col_label].iloc[idx1]
-                    - self.table[self.col_label].iloc[idx2]
+                    self.table[self.cols["label"]].iloc[idx1]
+                    - self.table[self.cols["label"]].iloc[idx2]
                 ) < -margin:
                     # first idx has lower discharge
                     label = -1
@@ -267,13 +233,13 @@ class FlowPhotoRankingDataset(FlowPhotoDataset):
                     # both indices have similar discharge
                     label = 0
             elif mode == "relative":
-                left_disch = self.table[self.col_label].iloc[idx1]
-                right_dishc = self.table[self.col_label].iloc[idx2]
-                min_disch = min(left_disch, right_dishc)
-                if (left_disch - right_dishc) / min_disch > margin:
+                left_label = self.table[self.cols["label"]].iloc[idx1]
+                right_label = self.table[self.cols["label"]].iloc[idx2]
+                min_label = min(left_label, right_label)
+                if (left_label - right_label) / min_label > margin:
                     # first idx has higher discharge
                     label = 1
-                elif (left_disch - right_dishc) / min_disch < -margin:
+                elif (left_label - right_label) / min_label < -margin:
                     # first idx has lower discharge
                     label = -1
                 else:
@@ -287,6 +253,66 @@ class FlowPhotoRankingDataset(FlowPhotoDataset):
                 [(idx1, idx2, label), (idx2, idx1, -1 * label)]
             )
         return labeled_ranked_image_pairs
+
+
+class FlowPhotoRankingPairsDataset():
+    def __init__(
+        self,
+        table,
+        images_dir,
+        transform=None,
+    ) -> None:
+        self.table = table
+        self.data_dir = images_dir
+        self.transform = transform
+
+    def get_image(self, filename):
+        image_path = os.path.join(
+            self.data_dir,
+            filename,
+        )
+
+        try:
+            image = read_image(image_path)
+            image = image / 255.0  # convert to float in [0,1]
+            return image
+        except:
+            print(f"Could not read image ({filename})")
+
+    def compute_mean_std(self, n=1000):
+        """Compute RGB channel means and stds for image samples in the dataset."""
+        means = np.zeros((3))
+        stds = np.zeros((3))
+        sample_size = min(len(self.table), n)
+        sample_indices = np.random.choice(
+            len(self.table), size=sample_size, replace=False
+        )
+        for idx in tqdm(sample_indices):
+            pair = self.get_pair(idx)
+            image = self.get_image(pair['filename_1'])
+            means += np.array(image.mean(dim=[1, 2]))
+            stds += np.array(image.std(dim=[1, 2]))
+        means = means / sample_size
+        stds = stds / sample_size
+        return means, stds
+
+    def get_pair(self, index):
+        return self.table.iloc[index]
+
+    def __len__(self):
+        return len(self.table)
+
+    def __getitem__(self, idx):
+        pair = self.get_pair(idx)
+        image1 = self.get_image(pair['filename_1'])
+        image2 = self.get_image(pair['filename_2'])
+        label = pair['pair_label']
+
+        if self.transform:
+            image1 = self.transform(image1)
+            image2 = self.transform(image2)
+
+        return image1, image2, label
 
 
 class ImagePairSampler:
@@ -521,82 +547,3 @@ class RandomStratifiedWindowFlow(DatasetSplitter):
             "test": df.iloc[test_inds],
         }
 
-
-# class FlowPhotoRankingDataset(FlowPhotoDataset):
-#     def __init__(
-#         self,
-#         table,
-#         data_dir,
-#         col_filename="filename",
-#         col_label="flow_cfs",
-#         transform=None,
-#         label_transform=None,
-#     ) -> None:
-#         super().__init__(
-#             table, data_dir, col_filename, col_label, transform, label_transform
-#         )
-
-# def compute_mean_std(self):
-#     means = np.zeros((3))
-#     stds = np.zeros((3))
-#     sample_size = min(len(self.table), 1000)
-#     sample_indices = np.random.choice(
-#         len(self.table), size=sample_size, replace=False
-#     )
-#     for index in sample_indices:
-#         image, _ = self[index]
-#         image = to_pil_image(image)
-#         stat = ImageStat.Stat(image)
-#         means += np.array(stat.mean) / 255.0
-#         stds += np.array(stat.stddev) / 255.0
-#     means = means / sample_size
-#     stds = stds / sample_size
-#     return means, stds
-
-# def set_mean_std(
-#     self, means, stds
-# ):  # TODO: explain if means are 0-1 scaled or 0-255 scaled
-#     self.means = means
-#     self.stds = stds
-
-
-# class FlowPhotoSite:
-#     def __init__(self, table, data_dir, col_filename="filename", col_label="flow_cfs"):
-#         self.table = table
-#         self.data_dir = data_dir
-#         self.col_filename = col_filename
-#         self.col_label = col_label
-
-
-# class FlowPhotoDataset(torch.utils.data.Dataset):
-#     def __init__(
-#         self,
-#         table,
-#         data_dir,
-#         col_filename="filename",
-#         col_label="flow_cfs",
-#         transform=None,
-#         label_transform=None,
-#     ):
-#         self.table = table
-#         self.data_dir = data_dir
-#         self.col_filename = col_filename
-#         self.col_label = col_label
-#         self.transform = transform
-#         self.label_transform = label_transform
-
-# def __len__(self):
-#     return len(self.table) # no. rows in csv file
-
-# def __getitem__(self, idx):
-#     filename = self.table.iloc[idx][self.col_filename]
-#     img_path = os.path.join(self.data_dir, "images", filename)
-#     image = read_image(img_path) # read image file as tensor
-#     image = image / 255.0 # convert to float in [0,1]
-
-#     label = self.table.iloc[idx][self.col_label] # get label from table
-#     if self.transform:
-#         image = self.transform(image) # transform image
-#     if self.label_transform:
-#         label = self.label_transform(label) # transform label
-#     return image, label
