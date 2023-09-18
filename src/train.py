@@ -3,7 +3,6 @@ import ast
 import os
 import time
 import json
-import pickle
 from functools import reduce
 import numpy as np
 import pandas as pd
@@ -32,15 +31,12 @@ from utils import (
     validate,
 )
 from datasets import (
-    RandomStratifiedWeeklyFlow,
+    RandomStratifiedWindowFlow,
     FlowPhotoRankingDataset,
     random_pairs,
 )
 from modules import ResNetRankNet
 from losses import RankNetLoss
-
-def list_files(directory):
-    return [f for f in os.listdir(directory) if os.path.isfile(os.path.join(directory, f))]
 
 def list_all_files(directory):
     for root, dirs, files in os.walk(directory):
@@ -96,14 +92,14 @@ def train(args):
 
     print(f"images_dir: {args.images_dir}")
     # list_all_files(args.images_dir)
-    
+
     print(f"values_dir: {args.values_dir}")
     # list_all_files(args.values_dir)
 
     print(f"output_dir: {args.output_dir}")
 
     output_data_dir = os.path.join(args.output_dir, "data")
-    
+
     with open(os.path.join(output_data_dir, "args.json"), "w") as f:
         json.dump(vars(args), f, indent = 2)
     print(f'saved args: {os.path.join(output_data_dir, "args.json")}')
@@ -118,16 +114,12 @@ def train(args):
     print("loading data file")
     data_filepath = os.path.join(args.values_dir, args.data_file)
     df = load_data(data_filepath)
-
-    df_filters = [
-        (filter_by_hour, {"min_hour": args.min_hour, "max_hour": args.max_hour}),
-        (filter_by_month, {"min_month": args.min_month, "max_month": args.max_month}),
-    ]
-    df = reduce(lambda _df, filter: _df.pipe(filter[0], **filter[1]), df_filters, df)
-    df.reset_index(inplace=True)
-    splits = RandomStratifiedWeeklyFlow().split(df, 0.8, 0.1, 0.1)
+    try:
+        splits = RandomStratifiedWindowFlow().split(df, 0.8, 0.1, 0.1)
+    except ValueError:
+        splits = RandomStratifiedWindowFlow().split(df, 0.8, 0.1, 0.1, window="day")
     train_df, val_df, test_df = splits["train"], splits["val"], splits["test"]
-    
+
     # save the train/val/test splits
     train_df.to_csv(os.path.join(output_data_dir, "train_data.csv"))
     val_df.to_csv(os.path.join(output_data_dir, "val_data.csv"))
@@ -137,13 +129,18 @@ def train(args):
     img_sample_mean, img_sample_std = train_ds.compute_mean_std(args.num_image_stats)
     print(f"image channelwise means: {img_sample_mean}")
     print(f"image channelwise stdevs: {img_sample_std}")
-    
+
     image = train_ds.get_image(0)
     aspect = image.shape[2] / image.shape[1]
     resize_shape = [480, np.int32(480 * aspect)]
     input_shape = [384, np.int32(384 * aspect)]
     image_transforms = create_image_transforms(
-        resize_shape, input_shape, means=img_sample_mean, stds=img_sample_std
+        resize_shape,
+        input_shape,
+        means=img_sample_mean,
+        stds=img_sample_std,
+        augmentation=args.augment,
+        normalization=args.normalize,
     )
     train_ds.transform = image_transforms["train"]
     val_ds = FlowPhotoRankingDataset(
@@ -156,50 +153,99 @@ def train(args):
         args.images_dir,
         transform=image_transforms["eval"],
     )
-    # create ranked image pairs from ground truth
-    train_ds.rank_image_pairs(
-        random_pairs, args.num_train_pairs, args.margin, args.margin_mode
-    )
-    val_ds.rank_image_pairs(
-        random_pairs, args.num_eval_pairs, args.margin, args.margin_mode
-    )
-    test_ds.rank_image_pairs(
-        random_pairs, args.num_eval_pairs, args.margin, args.margin_mode
-    )
-    # save the train/val/test ranked image pairs
-    train_pairs = [
-        {
-            "idx1": idx1,
-            "idx2": idx2,
-            "fn1": train_ds.table.iloc[idx1][train_ds.col_filename],
-            "fn2": train_ds.table.iloc[idx2][train_ds.col_filename],
-            "label": label,
-        }
-        for idx1, idx2, label in train_ds.ranked_image_pairs
-    ]
-    pd.DataFrame(train_pairs).to_csv(os.path.join(output_data_dir, "train_pairs.csv"))
-    val_pairs = [
-        {
-            "idx1": idx1,
-            "idx2": idx2,
-            "fn1": val_ds.table.iloc[idx1][val_ds.col_filename],
-            "fn2": val_ds.table.iloc[idx2][val_ds.col_filename],
-            "label": label,
-        }
-        for idx1, idx2, label in val_ds.ranked_image_pairs
-    ]
-    pd.DataFrame(val_pairs).to_csv(os.path.join(output_data_dir, "val_pairs.csv"))
-    test_pairs = [
-        {
-            "idx1": idx1,
-            "idx2": idx2,
-            "fn1": test_ds.table.iloc[idx1][test_ds.col_filename],
-            "fn2": test_ds.table.iloc[idx2][test_ds.col_filename],
-            "label": label,
-        }
-        for idx1, idx2, label in test_ds.ranked_image_pairs
-    ]
-    pd.DataFrame(test_pairs).to_csv(os.path.join(output_data_dir, "test_pairs.csv"))
+
+    if args.annotations is not None:
+        # create ranked image pairs from annotations file
+        annotations = pd.read_csv(args.annotations)
+        args.logger.info(
+            "Loaded %d annotations from %s" % (len(annotations), args.annotations)
+        )
+
+        # filter annotations by which images are in the train/val/test data splits
+        train_ds.annotate_image_pairs(annotations, args.num_train_pairs)
+        val_ds.annotate_image_pairs(annotations, args.num_eval_pairs)
+        test_ds.annotate_image_pairs(annotations, args.num_eval_pairs)
+
+        # # split annotations directly into train/val/test (but data cannot be split)
+        # splits = DatasetSplitter().split(annotations, 0.8, 0.1, 0.1)
+        # train_ann, val_ann, test_ann = splits["train"], splits["val"], splits["test"]
+        # train_ds.annotate_image_pairs(train_ann, args.num_train_pairs)
+        # val_ds.annotate_image_pairs(val_ann, args.num_eval_pairs)
+        # test_ds.annotate_image_pairs(test_ann, args.num_eval_pairs)
+
+        args.logger.info(
+            "%d annotations fall in the train set"
+            % (
+                len(train_ds.ranked_image_pairs) / 2
+            )  # flipping pairs doubles ranked_image_pairs size
+        )
+        args.logger.info(
+            "%d annotations fall in the val set"
+            % (
+                len(val_ds.ranked_image_pairs) / 2
+            )  # flipping pairs doubles ranked_image_pairs size
+        )
+        args.logger.info(
+            "%d annotations fall in the test set"
+            % (
+                len(test_ds.ranked_image_pairs) / 2
+            )  # flipping pairs doubles ranked_image_pairs size
+        )
+
+    else:
+        # create ranked image pairs from ground truth
+        train_ds.rank_image_pairs(
+            random_pairs,
+            args.num_train_pairs,
+            args.margin,
+            args.margin_mode
+        )
+        val_ds.rank_image_pairs(
+            random_pairs,
+            args.num_eval_pairs,
+            args.margin,
+            args.margin_mode
+        )
+        test_ds.rank_image_pairs(
+            random_pairs,
+            args.num_eval_pairs,
+            args.margin,
+            args.margin_mode
+        )
+        # save the train/val/test ranked image pairs
+        train_pairs = [
+            {
+                "idx1": idx1,
+                "idx2": idx2,
+                "fn1": train_ds.table.iloc[idx1][train_ds.col_filename],
+                "fn2": train_ds.table.iloc[idx2][train_ds.col_filename],
+                "label": label,
+            }
+            for idx1, idx2, label in train_ds.ranked_image_pairs
+        ]
+        pd.DataFrame(train_pairs).to_csv(os.path.join(output_data_dir, "train_pairs.csv"))
+        val_pairs = [
+            {
+                "idx1": idx1,
+                "idx2": idx2,
+                "fn1": val_ds.table.iloc[idx1][val_ds.col_filename],
+                "fn2": val_ds.table.iloc[idx2][val_ds.col_filename],
+                "label": label,
+            }
+            for idx1, idx2, label in val_ds.ranked_image_pairs
+        ]
+        pd.DataFrame(val_pairs).to_csv(os.path.join(output_data_dir, "val_pairs.csv"))
+        test_pairs = [
+            {
+                "idx1": idx1,
+                "idx2": idx2,
+                "fn1": test_ds.table.iloc[idx1][test_ds.col_filename],
+                "fn2": test_ds.table.iloc[idx2][test_ds.col_filename],
+                "label": label,
+            }
+            for idx1, idx2, label in test_ds.ranked_image_pairs
+        ]
+        pd.DataFrame(test_pairs).to_csv(os.path.join(output_data_dir, "test_pairs.csv"))
 
     # TODO: do we need worker_init_fn here for reproducibility?
     train_dl = torch.utils.data.DataLoader(
@@ -228,10 +274,6 @@ def train(args):
         truncate=2,
         pretrained=True,
     )
-    # freeze the resnet backbone
-    for p in list(model.children())[0].parameters():
-        p.requires_grad = False
-    unfreeze_after = args.unfreeze_after
     model = torch.nn.DataParallel(
         model,
         device_ids=[
@@ -241,10 +283,20 @@ def train(args):
     model.to(device)
 
     # # # # # # # # # # # # # # # # # # # # # # # # #
-    # INITIALIZE LOSS, OPTIMIZER, LR SCHEDULER
+    # INITIALIZE LOSS, OPTIMIZER
     # # # # # # # # # # # # # # # # # # # # # # # # #
     criterion = RankNetLoss()
     optimizer = torch.optim.SGD(model.parameters(), lr=args.lr, momentum=0.9)
+
+    # # # # # # # # # # # # # # # # # # # # # # # # #
+    # FREEZE RESNET BACKBONE
+    # # # # # # # # # # # # # # # # # # # # # # # # #
+    for p in list(model.children())[0].parameters():
+        p.requires_grad = False
+
+    # # # # # # # # # # # # # # # # # # # # # # # # #
+    # INITIALIZE LR SCHEDULER WITH OPTIMIZER
+    # # # # # # # # # # # # # # # # # # # # # # # # #
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
         optimizer, "min", patience=1, factor=0.5
     )
@@ -257,21 +309,10 @@ def train(args):
     metriclogs["val_loss"] = []
     metriclogs["test_loss"] = []
 
-    # paramstrings = []
-    # paramstrings.append("ranking")
-    # paramstrings.extend(["margin", str(args.margin)])
-    # paramstrings.extend(["randompairs", str(args.num_train_pairs)])
-    # if args.augment:
-    #     paramstrings.append("augment")
-    # if args.normalize:
-    #     paramstrings.append("normalize")
-    # paramstrings.append(str(args.random_seed))
-    # paramstr = "_".join(paramstrings)
-
     # # # # # # # # # # # # # # # # # # # # # # # # #
     # TRAIN
     # # # # # # # # # # # # # # # # # # # # # # # # #
-    min_test_loss = None
+    min_val_loss = None
     for epoch in range(0, args.epochs):
         # train
         start_time = time.time()
@@ -321,8 +362,8 @@ def train(args):
             epoch_checkpoint_save_path,
         )
 
-        if (min_test_loss is None or testset_eval[0] < min_test_loss):
-            print(f"lowest test loss so far, saving to final destination (epoch={epoch})")
+        if (min_val_loss is None or valset_eval[0] < min_val_loss):
+            print(f"lowest val loss so far, saving to final destination (epoch={epoch})")
 
             final_model_path = os.path.join(args.model_dir, "model.pth")
             torch.save(
@@ -341,6 +382,7 @@ def train(args):
                 },
                 final_model_path,
             )
+            min_val_loss = valset_eval[0]
 
         metrics_checkpoint_file = "metrics_per_epoch.json"
         metrics_checkpoint_save_path = os.path.join(
@@ -355,11 +397,6 @@ def train(args):
             for p in list(model.children())[0].parameters():
                 p.requires_grad = True
 
-    # save losses and any other metrics tracked during training
-    metrics_file = "metrics_per_epoch.pkl"
-    metrics_save_path = os.path.join(output_data_dir, metrics_file)
-    with open(metrics_save_path, "wb") as f:
-        pickle.dump(metriclogs, f, protocol=pickle.HIGHEST_PROTOCOL)
     print("finished")
 
 
@@ -422,6 +459,12 @@ if __name__ == "__main__":
         default=1000,
         help="number of labeled image pairs on which to evaluate model",
     )
+    parser.add_argument(
+        "--annotations",
+        type=str,
+        default=None,
+        help="path to CSV file with annotations for ranking model training",
+    )
 
     parser.add_argument(
         "--data-file",
@@ -434,30 +477,6 @@ if __name__ == "__main__":
         type=str,
         default="timestamp",
         help="datetime column name in data-file",
-    )
-    parser.add_argument(
-        "--min-hour",
-        type=int,
-        default=0,
-        help="minimum timestamp hour for including samples in data-file",
-    )
-    parser.add_argument(
-        "--max-hour",
-        type=int,
-        default=23,
-        help="maximum timestamp hour for including samples in data-file",
-    )
-    parser.add_argument(
-        "--min-month",
-        type=int,
-        default=1,
-        help="minimum timestamp month for including samples in data-file",
-    )
-    parser.add_argument(
-        "--max-month",
-        type=int,
-        default=12,
-        help="maximum timestamp month for including samples in data-file",
     )
     parser.add_argument(
         "--normalize",
