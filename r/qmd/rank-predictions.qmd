@@ -1,0 +1,374 @@
+---
+title: "Rank Model Predictions | `r params$site`"
+format:
+  html:
+    toc: true
+    toc-location: left
+    page-layout: full
+    self-contained: true
+params:
+  site: "AVERYBB"
+  root_dir: "D:/fpe/sites"
+  filename: "predictions.csv"
+editor_options: 
+  chunk_output_type: console
+---
+
+
+```{r setup, echo=FALSE, warning=FALSE}
+suppressPackageStartupMessages(library(tidyverse))
+suppressPackageStartupMessages(library(lubridate))
+suppressPackageStartupMessages(library(glue))
+suppressPackageStartupMessages(library(patchwork))
+
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE, fig.width = 12)
+
+# params <- list(
+#   root_dir = "D:/fpe/sites",
+#   site = "AVERYBB",
+#   filename = "predictions.csv"
+# )
+
+pred_file <- file.path(params$root_dir, params$site, "transform", params$filename)
+station_file <- file.path(params$root_dir, params$site, "data", "station.json")
+flow_images_file <- file.path(params$root_dir, params$site, "data", "flow-images-train.csv")
+args_file <- file.path(params$root_dir, params$site, "model", "output", "args.json")
+train_file <- file.path(params$root_dir, params$site, "model", "output", "train_pairs.csv")
+val_file <- file.path(params$root_dir, params$site, "model", "output", "val_pairs.csv")
+test_file <- file.path(params$root_dir, params$site, "model", "output", "test_pairs.csv")
+```
+
+```{r load}
+stn <- jsonlite::read_json(station_file)
+args <- jsonlite::read_json(args_file)
+flow_images <- read_csv(flow_images_file, show_col_types = FALSE)
+train_pairs <- read_csv(train_file, show_col_types = FALSE)
+val_pairs <- read_csv(val_file, show_col_types = FALSE)
+test_pairs <- read_csv(test_file, show_col_types = FALSE)
+
+pairs <- bind_rows(
+  train = train_pairs,
+  val = val_pairs,
+  test = test_pairs,
+  .id = "split"
+) %>%
+  mutate(split = factor(split, levels = c("train", "val", "test"))) %>%
+  left_join(
+    flow_images %>%
+      select(fn1 = filename, timestamp_1 = timestamp, flow_1 = flow_cfs),
+    by = "fn1"
+  ) %>%
+  left_join(
+    flow_images %>%
+      select(fn2 = filename, timestamp_2 = timestamp, flow_2 = flow_cfs),
+    by = "fn2"
+  )
+pairs <- bind_rows(
+  `1` = select(pairs, split, image_id = idx1, timestamp = timestamp_1, flow = flow_1),
+  `2` = select(pairs, split, image_id = idx2, timestamp = timestamp_2, flow = flow_2),
+  .id = "i"
+)
+splits <- pairs %>% 
+  select(timestamp, split) %>% 
+  distinct()
+
+pred <- read_csv(pred_file, show_col_types = FALSE) %>%
+  mutate(
+    timestamp = with_tz(timestamp, tzone = "US/Eastern"),
+    date = as_date(timestamp),
+    hour = hour(timestamp),
+    rank_obs = rank(flow_cfs) / n(),
+    rank_pred = rank(score) / n(),
+    rank_resid = (rank_obs - rank_pred)
+  ) %>% 
+  left_join(
+    splits, by = "timestamp"
+  ) %>% 
+  mutate(
+    split = coalesce(split, "N/A"),
+    split = factor(split, levels = c("train", "val", "test", "N/A"))
+  )
+pred <- pred %>% 
+  complete(date = seq.Date(min(pred$date), max(pred$date), by = "1 day")) %>%
+  mutate(
+    timestamp = coalesce(timestamp, as.POSIXct(date))
+  )
+
+pred_day <- pred %>%
+  filter(!is.na(score)) %>% 
+  group_by(date) %>%
+  summarise(
+    flow_cfs = mean(flow_cfs),
+    score = mean(score),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    rank_obs = rank(flow_cfs) / n(),
+    rank_pred = rank(score) / n()
+  ) %>% 
+  left_join(
+    pred %>%
+      select(date, split) %>%
+      filter(!is.na(split), split != "N/A") %>%
+      distinct(),
+    by = "date"
+  ) %>% 
+  complete(date = seq.Date(min(pred$date), max(pred$date), by = "1 day")) %>% 
+  mutate(split = factor(coalesce(split, "N/A"), levels = levels(pred$split)))
+
+tau <- pred %>% 
+  bind_rows(
+    pred %>% 
+      transmute(
+        split = "total",
+        flow_cfs,
+        score
+      )
+  ) %>% 
+  filter(!is.na(score)) %>% 
+  group_by(split) %>% 
+  summarise(
+    n = sum(!is.na(score)),
+    tau = cor(flow_cfs, score, method = "kendall", use = "complete.obs")
+  ) %>%
+  select(split, tau) %>% 
+  deframe()
+```
+
+```txt
+Report Generated: `r Sys.time()`
+
+Station:   `r stn$name`
+File:      `r pred_file`
+
+Start:    `r min(pred$timestamp)`
+End:      `r max(pred$timestamp)`
+# Images: `r scales::comma(nrow(pred))`
+
+Tau:      
+  Train:   `r sprintf("%.2f", tau["train"])`
+  Val:     `r sprintf("%.2f", tau["val"])`
+  Test:    `r sprintf("%.2f", tau["test"])`
+  Overall: `r sprintf("%.2f", tau["total"])`
+
+Training Params:
+  # Epochs:      `r args$epochs`
+  Learn Rate:    `r args$lr`
+  # Train Pairs: `r args$num_train_pairs`
+  # Eval Pairs:  `r args$num_eval_pairs`
+  Annotator:     oracle
+  Margin Mode:   `r args$margin_mode`
+  Margin:        `r args$margin`
+```
+
+## Timeseries
+
+```{r ts_value, fig.height=8}
+pred %>%
+  transmute(timestamp, `log(flow_cfs)` = log10(flow_cfs), score) %>%
+  pivot_longer(-timestamp) %>%
+  ggplot(aes(timestamp, value)) +
+  geom_line() +
+  geom_point(
+    data = pairs %>% 
+      mutate(flow = log10(flow)) %>% 
+      mutate(name = "log(flow_cfs)"),
+    aes(y = flow, color = split),
+    size = 0.5
+  ) +
+  scale_x_datetime(date_labels = "%b %Y", date_breaks = "2 months", expand = expansion()) +
+  facet_wrap(vars(name), scales = "free_y", ncol = 1, strip.position = "left", labeller = labeller(
+    name = c("log(flow_cfs)" = "Obs log10(Flow [cfs])", "score" = "Pred Score")
+  )) +
+  labs(x = "Date", y = NULL) +
+  scale_color_brewer("Split", palette = "Set1", labels = c(
+    "train" = "Train",
+    "val" = "Validation", 
+    "test" = "Test"
+  )) +
+  labs(
+    x = "Date",
+    title = "Timeseries of Observed Flow and Predicted Scores"
+  ) +
+  guides(color = guide_legend(override.aes = list(size = 1))) +
+  theme_bw() +
+  theme(
+    strip.placement = "outside",
+    strip.background = element_blank(),
+    strip.text = element_text(size = 12)
+  )
+```
+
+```{r ts_rank, fig.height=4}
+pred %>%
+  filter(!is.na(split)) %>% 
+  ggplot(aes(timestamp)) +
+  geom_line(aes(y = rank_pred, linetype = "Predicted"), color = "black") +
+  geom_point(aes(y = rank_obs, color = split), size = 0.5) +
+  scale_color_brewer("Split", palette = "Set1") +
+  scale_x_datetime(date_labels = "%b %Y", date_breaks = "2 months", expand = expansion()) +
+  scale_y_continuous(breaks = scales::pretty_breaks(n = 8), labels = scales::percent_format(accuracy = 1), expand = expansion()) +
+  guides(
+    color = guide_legend(override.aes = list(size = 1))
+  ) +
+  labs(
+    x = "Date",
+    y = "Percentile Rank",
+    linetype = NULL,
+    title = "Timeseries of Observed and Predicted Ranks",
+  ) +
+  theme_bw()
+```
+
+## Scatter Plots
+
+```{r splot}
+p1 <- pred %>%
+  filter(!is.na(split)) %>% 
+  ggplot(aes(flow_cfs, score)) +
+  geom_point(aes(color = split), size = 0.5, alpha = 0.5) +
+  geom_smooth(method = "loess", span = 0.9, se = FALSE, formula = y ~ x, color = "black") +
+  scale_color_brewer("Split", palette = "Set1") +
+  scale_x_log10() +
+  labs(
+    x = "Obs Flow (cfs)",
+    y = "Predicted Score",
+    title = "Observed Flow vs Predicted Score"
+  ) +
+  guides(color = guide_legend(override.aes = list(size = 1))) +
+  theme_bw() +
+  theme(aspect.ratio = 1)
+p2 <- pred %>%
+  filter(!is.na(split)) %>% 
+  ggplot(aes(rank_obs, rank_pred)) +
+  geom_point(aes(color = split), size = 0.5, alpha = 0.5) +
+  geom_abline(color = "black", linewidth = 1) +
+  scale_color_brewer("Split", palette = "Set1") +
+  scale_x_continuous(breaks = scales::pretty_breaks(), labels = scales::percent_format(accuracy = 1), expand = expansion(), limits = c(0, NA)) +
+  scale_y_continuous(breaks = scales::pretty_breaks(), labels = scales::percent_format(accuracy = 1), expand = expansion(), limits = c(0, NA)) +
+  labs(
+    x = "Observed Rank",
+    y = "Predicted Rank",
+    title = "Observed vs. Predicted Ranks"
+  ) +
+  guides(color = guide_legend(override.aes = list(size = 1))) +
+  theme_bw() +
+  theme(aspect.ratio = 1)
+wrap_plots(p1, p2, nrow = 1) +
+  plot_layout(guides = "collect")
+```
+
+## Residuals
+
+```{r resid_ts, fig.height=4}
+pred %>%
+  filter(!is.na(split)) %>% 
+  ggplot(aes(timestamp, rank_resid)) +
+  geom_hline(yintercept = 0) +
+  geom_point(aes(color = split), size = 0.5, alpha = 0.5) +
+  scale_color_brewer("Split", palette = "Set1") +
+  scale_x_datetime(date_labels = "%b %Y", date_breaks = "2 months", expand = expansion()) +
+  scale_y_continuous(breaks = scales::pretty_breaks(n = 8), labels = scales::percent_format(accuracy = 1), expand = expansion()) +
+  guides(color = guide_legend(override.aes = list(size = 1))) +
+  labs(
+    x = "Date",
+    y = "Percentile Rank Residual (Obs-Pred)",
+    title = "Timeseries of Percentile Rank Residuals (Obs - Pred)"
+  ) +
+  theme_bw()
+```
+
+```{r resid_splot}
+p1 <- pred %>%
+  filter(!is.na(split)) %>% 
+  ggplot(aes(rank_pred, rank_resid)) +
+  geom_hline(yintercept = 0) +
+  geom_point(size = 0.2) +
+  geom_point(aes(color = split), size = 0.5, alpha = 0.5) +
+  scale_color_brewer("Split", palette = "Set1") +
+  scale_y_continuous(breaks = scales::pretty_breaks(n = 8), labels = scales::percent_format(accuracy = 1), expand = expansion()) +
+  scale_x_continuous(breaks = scales::pretty_breaks(n = 8), labels = scales::percent_format(accuracy = 1), expand = expansion(), limits = c(0, 1)) +
+  guides(color = guide_legend(override.aes = list(size = 1))) +
+  labs(
+    x = "Predicted Percentile Rank",
+    y = "Percentile Rank Residual (Obs-Pred)",
+    title = "Percentile Rank Residuals vs Fitted"
+  ) +
+  theme_bw() +
+  theme(aspect.ratio = 1)
+
+p2 <- pred %>%
+  filter(!is.na(rank_resid)) %>% 
+  ggplot(aes(hour(timestamp), rank_resid)) +
+  geom_hline(yintercept = 0) +
+  geom_jitter(aes(color = split), height = 0, size = 0.5, alpha = 0.5) +
+  scale_color_brewer("Split", palette = "Set1") +
+  scale_y_continuous(breaks = scales::pretty_breaks(n = 8), labels = scales::percent_format(accuracy = 1), expand = expansion()) +
+  scale_x_continuous(breaks = scales::pretty_breaks(n = 10)) +
+  guides(color = guide_legend(override.aes = list(size = 1))) +
+  labs(
+    x = "Hour of Day",
+    y = "Percentile Rank Residual (Obs-Pred)",
+    title = "Diurnal Pattern"
+  ) +
+  theme_bw() +
+  theme(aspect.ratio = 1)
+
+p3 <- pred %>%
+  filter(!is.na(rank_resid)) %>% 
+  ggplot(aes(ymd(20001231) + days(yday(timestamp)), rank_resid)) +
+  geom_hline(yintercept = 0) +
+  geom_jitter(aes(color = split), height = 0, size = 0.5, alpha = 0.5) +
+  scale_color_brewer("Split", palette = "Set1") +
+  scale_y_continuous(breaks = scales::pretty_breaks(n = 8), labels = scales::percent_format(accuracy = 1), expand = expansion()) +
+  scale_x_date(date_breaks = "2 months", date_labels = "%b %d") +
+  guides(color = guide_legend(override.aes = list(size = 1))) +
+  labs(
+    x = "Day of Year",
+    y = "Percentile Rank Residual (Obs-Pred)",
+    title = "Seasonal Pattern"
+  ) +
+  theme_bw() +
+  theme(aspect.ratio = 1)
+
+wrap_plots(p1, p2, p3, nrow = 1) +
+  plot_layout(guides = "collect")
+```
+
+
+## Daily Aggregation
+
+```{r day_ts, fig.height=4}
+pred_day %>%
+  ggplot(aes(date)) +
+  geom_step(aes(y = rank_pred, linetype = "Predicted"), color = "black") +
+  geom_point(aes(y = rank_obs, color = split), size = 1) +
+  scale_color_brewer("Split", palette = "Set1") +
+  scale_x_date(date_labels = "%b %Y", date_breaks = "2 months", expand = expansion()) +
+  scale_y_continuous(breaks = scales::pretty_breaks(n = 8), labels = scales::percent_format(accuracy = 1), expand = expansion()) +
+  labs(
+    x = "Date",
+    y = "Percentile Rank",
+    linetype = NULL,
+    title = "Daily Timeseries of Observed and Predicted Ranks"
+  ) +
+  theme_bw()
+```
+
+
+```{r day_splot, fig.width=4, fig.height=4}
+pred_day %>%
+  ggplot(aes(rank_obs, rank_pred)) +
+  geom_point(aes(color = split), size = 1, alpha = 0.5) +
+  geom_abline(color = "black") +
+  scale_color_brewer("Split", palette = "Set1") +
+  scale_x_continuous(breaks = scales::pretty_breaks(), expand = expansion(), limits = c(0, NA)) +
+  scale_y_continuous(breaks = scales::pretty_breaks(), expand = expansion(), limits = c(0, NA)) +
+  labs(
+    x = "Observed Rank",
+    y = "Predicted Rank",
+    title = "Observed vs. Predicted Daily Ranks"
+  ) +
+  theme_bw() +
+  theme(aspect.ratio = 1)
+```
