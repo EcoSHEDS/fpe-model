@@ -3,6 +3,7 @@ import ast
 import os
 import time
 import json
+import pandas as pd
 import numpy as np
 import torch
 import torch.nn
@@ -117,7 +118,7 @@ def train(args):
     print(f"img_sample_mean: {img_sample_mean}")
     print(f"img_sample_std: {img_sample_std}")
     pair = train_ds.get_pair(0)
-    image = train_ds.get_image(pair["filename1"])
+    image = train_ds.get_image(pair["filename_1"])
     aspect = image.shape[2] / image.shape[1]
     resize_shape = [480, np.int32(480 * aspect)]
     input_shape = [384, np.int32(384 * aspect)]
