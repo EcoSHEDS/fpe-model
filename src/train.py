@@ -257,17 +257,16 @@ def train(args):
     metriclogs["val_loss"] = []
     metriclogs["test_loss"] = []
 
-    paramstrings = []
-    paramstrings.append("ranking")
-    paramstrings.extend(["margin", str(args.margin)])
-    paramstrings.extend(["randompairs", str(args.num_train_pairs)])
-    paramstrings.append(args.site)
-    if args.augment:
-        paramstrings.append("augment")
-    if args.normalize:
-        paramstrings.append("normalize")
-    paramstrings.append(str(args.random_seed))
-    paramstr = "_".join(paramstrings)
+    # paramstrings = []
+    # paramstrings.append("ranking")
+    # paramstrings.extend(["margin", str(args.margin)])
+    # paramstrings.extend(["randompairs", str(args.num_train_pairs)])
+    # if args.augment:
+    #     paramstrings.append("augment")
+    # if args.normalize:
+    #     paramstrings.append("normalize")
+    # paramstrings.append(str(args.random_seed))
+    # paramstr = "_".join(paramstrings)
 
     # # # # # # # # # # # # # # # # # # # # # # # # #
     # TRAIN
@@ -343,7 +342,7 @@ def train(args):
                 final_model_path,
             )
 
-        metrics_checkpoint_file = "metrics_per_epoch_" + paramstr + ".json"
+        metrics_checkpoint_file = "metrics_per_epoch.json"
         metrics_checkpoint_save_path = os.path.join(
             output_data_dir, metrics_checkpoint_file
         )
@@ -357,7 +356,7 @@ def train(args):
                 p.requires_grad = True
 
     # save losses and any other metrics tracked during training
-    metrics_file = "metrics_per_epoch_" + paramstr + ".pkl"
+    metrics_file = "metrics_per_epoch.pkl"
     metrics_save_path = os.path.join(output_data_dir, metrics_file)
     with open(metrics_save_path, "wb") as f:
         pickle.dump(metriclogs, f, protocol=pickle.HIGHEST_PROTOCOL)
@@ -423,7 +422,7 @@ if __name__ == "__main__":
         default=1000,
         help="number of labeled image pairs on which to evaluate model",
     )
-    
+
     parser.add_argument(
         "--data-file",
         type=str,
