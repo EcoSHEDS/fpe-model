@@ -479,6 +479,7 @@ def parse_configargparse_args(params_file):
         "unfreeze_after": int,
         "random_seed": int,
         "gpu": int,
+        "annotations": str,
     }
     for key, val in parsed_values.items():
         parsed_values[key] = types[key](val)

@@ -36,7 +36,8 @@ from src.utils import (
     validate,
 )
 from src.datasets import (
-    RandomStratifiedWeeklyFlow,
+    DatasetSplitter,
+    RandomStratifiedWindowFlow,
     FlowPhotoRankingDataset,
     random_pairs,
 )
@@ -105,6 +106,18 @@ def create_image_transforms(
     return image_transforms
 
 
+def filter_data(df, args):
+    # filter by time of day, month of year, etc.
+    # https://stackoverflow.com/a/68652715
+    df_filters = [
+        (filter_by_hour, {"min_hour": args.min_hour, "max_hour": args.max_hour}),
+        (filter_by_month, {"min_month": args.min_month, "max_month": args.max_month}),
+    ]
+    df = reduce(lambda _df, filter: _df.pipe(filter[0], **filter[1]), df_filters, df)
+    df.reset_index(inplace=True)
+    return df
+
+
 def train_ranking_model(args):
     with open(os.path.join(args.exp_dir, "params.txt"), "w") as f:
         f.write(args.parser.format_values())
@@ -118,16 +131,16 @@ def train_ranking_model(args):
     # CREATE / LOAD DATA SPLITS
     # # # # # # # # # # # # # # # # # # # # # # # # #
     df = load_data(args.data_file)
-    # filter by time of day, month of year, etc.
-    # https://stackoverflow.com/a/68652715
-    df_filters = [
-        (filter_by_hour, {"min_hour": args.min_hour, "max_hour": args.max_hour}),
-        (filter_by_month, {"min_month": args.min_month, "max_month": args.max_month}),
-    ]
-    df = reduce(lambda _df, filter: _df.pipe(filter[0], **filter[1]), df_filters, df)
-    df.reset_index(inplace=True)
-    splits = RandomStratifiedWeeklyFlow().split(df, 0.8, 0.1, 0.1)
+    df = filter_data(df, args)
+    try:
+        splits = RandomStratifiedWindowFlow().split(df, 0.8, 0.1, 0.1)
+    except ValueError:
+        splits = RandomStratifiedWindowFlow().split(df, 0.8, 0.1, 0.1, window="day")
     train_df, val_df, test_df = splits["train"], splits["val"], splits["test"]
+
+    # # split annotations directly into train/val/test (but data cannot be split)
+    # train_df, val_df, test_df = df, df, df
+
     # save the train/val/test splits
     train_df.to_csv(os.path.join(args.exp_dir, "train_data.csv"))
     args.logger.info(
@@ -172,59 +185,106 @@ def train_ranking_model(args):
         args.image_root_dir,
         transform=image_transforms["eval"],
     )
-    # create ranked image pairs from ground truth
-    train_ds.rank_image_pairs(
-        random_pairs, args.num_train_pairs, args.margin, args.margin_mode
-    )
-    val_ds.rank_image_pairs(
-        random_pairs, args.num_eval_pairs, args.margin, args.margin_mode
-    )
-    test_ds.rank_image_pairs(
-        random_pairs, args.num_eval_pairs, args.margin, args.margin_mode
-    )
-    # save the train/val/test ranked image pairs
-    train_pairs = [
-        {
-            "idx1": idx1,
-            "idx2": idx2,
-            "fn1": train_ds.table.iloc[idx1][train_ds.col_filename],
-            "fn2": train_ds.table.iloc[idx2][train_ds.col_filename],
-            "label": label,
-        }
-        for idx1, idx2, label in train_ds.ranked_image_pairs
-    ]
-    pd.DataFrame(train_pairs).to_csv(os.path.join(args.exp_dir, "train_pairs.csv"))
-    args.logger.info(
-        f'Train pairs saved to {os.path.join(args.exp_dir, "train_pairs.csv")}'
-    )
-    val_pairs = [
-        {
-            "idx1": idx1,
-            "idx2": idx2,
-            "fn1": val_ds.table.iloc[idx1][val_ds.col_filename],
-            "fn2": val_ds.table.iloc[idx2][val_ds.col_filename],
-            "label": label,
-        }
-        for idx1, idx2, label in val_ds.ranked_image_pairs
-    ]
-    pd.DataFrame(val_pairs).to_csv(os.path.join(args.exp_dir, "val_pairs.csv"))
-    args.logger.info(
-        f'Val pairs saved to {os.path.join(args.exp_dir, "val_pairs.csv")}'
-    )
-    test_pairs = [
-        {
-            "idx1": idx1,
-            "idx2": idx2,
-            "fn1": test_ds.table.iloc[idx1][test_ds.col_filename],
-            "fn2": test_ds.table.iloc[idx2][test_ds.col_filename],
-            "label": label,
-        }
-        for idx1, idx2, label in test_ds.ranked_image_pairs
-    ]
-    pd.DataFrame(test_pairs).to_csv(os.path.join(args.exp_dir, "test_pairs.csv"))
-    args.logger.info(
-        f'Test pairs saved to {os.path.join(args.exp_dir, "test_pairs.csv")}'
-    )
+    if args.annotations is not None:
+        # create ranked image pairs from annotations
+        annotations = pd.read_csv(args.annotations)
+        args.logger.info(
+            "Loaded %d annotations from %s" % (len(annotations), args.annotations)
+        )
+        # filter annotations by which images are in the train/val/test data splits
+        train_ds.annotate_image_pairs(annotations, args.num_train_pairs)
+        val_ds.annotate_image_pairs(annotations, args.num_eval_pairs)
+        test_ds.annotate_image_pairs(annotations, args.num_eval_pairs)
+
+        # # split annotations directly into train/val/test (but data cannot be split)
+        # splits = DatasetSplitter().split(annotations, 0.8, 0.1, 0.1)
+        # train_ann, val_ann, test_ann = splits["train"], splits["val"], splits["test"]
+        # train_ds.annotate_image_pairs(train_ann, args.num_train_pairs)
+        # val_ds.annotate_image_pairs(val_ann, args.num_eval_pairs)
+        # test_ds.annotate_image_pairs(test_ann, args.num_eval_pairs)
+
+        args.logger.info(
+            "%d annotations fall in the train set"
+            % (
+                len(train_ds.ranked_image_pairs) / 2
+            )  # flipping pairs doubles ranked_image_pairs size
+        )
+        args.logger.info(
+            "%d annotations fall in the val set"
+            % (
+                len(val_ds.ranked_image_pairs) / 2
+            )  # flipping pairs doubles ranked_image_pairs size
+        )
+        args.logger.info(
+            "%d annotations fall in the test set"
+            % (
+                len(test_ds.ranked_image_pairs) / 2
+            )  # flipping pairs doubles ranked_image_pairs size
+        )
+
+    else:
+        # create ranked image pairs from ground truth
+        train_ds.rank_image_pairs(
+            random_pairs,
+            args.num_train_pairs,
+            args.margin,
+            args.margin_mode,
+        )
+        val_ds.rank_image_pairs(
+            random_pairs,
+            args.num_eval_pairs,
+            args.margin,
+            args.margin_mode,
+        )
+        test_ds.rank_image_pairs(
+            random_pairs,
+            args.num_eval_pairs,
+            args.margin,
+            args.margin_mode,
+        )
+        # save the train/val/test ranked image pairs
+        train_pairs = [
+            {
+                "idx1": idx1,
+                "idx2": idx2,
+                "fn1": train_ds.table.iloc[idx1][train_ds.col_filename],
+                "fn2": train_ds.table.iloc[idx2][train_ds.col_filename],
+                "label": label,
+            }
+            for idx1, idx2, label in train_ds.ranked_image_pairs
+        ]
+        pd.DataFrame(train_pairs).to_csv(os.path.join(args.exp_dir, "train_pairs.csv"))
+        args.logger.info(
+            f'Train pairs saved to {os.path.join(args.exp_dir, "train_pairs.csv")}'
+        )
+        val_pairs = [
+            {
+                "idx1": idx1,
+                "idx2": idx2,
+                "fn1": val_ds.table.iloc[idx1][val_ds.col_filename],
+                "fn2": val_ds.table.iloc[idx2][val_ds.col_filename],
+                "label": label,
+            }
+            for idx1, idx2, label in val_ds.ranked_image_pairs
+        ]
+        pd.DataFrame(val_pairs).to_csv(os.path.join(args.exp_dir, "val_pairs.csv"))
+        args.logger.info(
+            f'Val pairs saved to {os.path.join(args.exp_dir, "val_pairs.csv")}'
+        )
+        test_pairs = [
+            {
+                "idx1": idx1,
+                "idx2": idx2,
+                "fn1": test_ds.table.iloc[idx1][test_ds.col_filename],
+                "fn2": test_ds.table.iloc[idx2][test_ds.col_filename],
+                "label": label,
+            }
+            for idx1, idx2, label in test_ds.ranked_image_pairs
+        ]
+        pd.DataFrame(test_pairs).to_csv(os.path.join(args.exp_dir, "test_pairs.csv"))
+        args.logger.info(
+            f'Test pairs saved to {os.path.join(args.exp_dir, "test_pairs.csv")}'
+        )
 
     # TODO: do we need worker_init_fn here for reproducibility?
     train_dl = torch.utils.data.DataLoader(
@@ -289,8 +349,6 @@ def train_ranking_model(args):
         # freeze the resnet backbone
         for p in list(model.module.children())[0].parameters():
             p.requires_grad = False
-
-    # assert False, "trying to figure out what is wrong"
 
     # # # # # # # # # # # # # # # # # # # # # # # # #
     # INITIALIZE LR SCHEDULER WITH OPTIMIZER
