@@ -133,27 +133,31 @@ def train(args):
     )
     train_ds.transform = image_transforms["train"]
     print("creating val/test datasets")
-    val_ds = FlowPhotoRankingDataset(
+    print(f"val df: {len(val_df)}")
+    val_ds = FlowPhotoRankingPairsDataset(
         val_df,
         args.images_dir,
         transform=image_transforms["eval"],
     )
-    test_ds = FlowPhotoRankingDataset(
+    print(f"val ds: {len(val_ds)}")
+    print(f"test df: {len(test_df)}")
+    test_ds = FlowPhotoRankingPairsDataset(
         test_df,
         args.images_dir,
         transform=image_transforms["eval"],
     )
+    print(f"test ds: {len(test_ds)}")
 
     print("creating data loaders")
     # TODO: do we need worker_init_fn here for reproducibility?
     train_dl = torch.utils.data.DataLoader(
-        train_ds, batch_size=args.batch_size, shuffle=True, num_workers=4
+        train_ds, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers
     )
     val_dl = torch.utils.data.DataLoader(
-        val_ds, batch_size=args.batch_size, shuffle=False, num_workers=4
+        val_ds, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers
     )
     test_dl = torch.utils.data.DataLoader(
-        test_ds, batch_size=args.batch_size, shuffle=False, num_workers=4
+        test_ds, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers
     )
 
     # # # # # # # # # # # # # # # # # # # # # # # # #
@@ -197,7 +201,7 @@ def train(args):
     # INITIALIZE LOSS LOGS
     # # # # # # # # # # # # # # # # # # # # # # # # #
     metriclogs = {}
-    metriclogs["training_loss"] = []
+    metriclogs["train_loss"] = []
     metriclogs["val_loss"] = []
     metriclogs["test_loss"] = []
 
@@ -207,12 +211,13 @@ def train(args):
     print("start training")
     min_val_loss = None
     for epoch in range(0, args.epochs):
+        print(f"start training (epoch={epoch})")
         start_time = time.time()
         avg_loss_training = fit(
             model, criterion, optimizer, train_dl, device, epoch_num=epoch
         )
         stop_time = time.time()
-        metriclogs["training_loss"].append(avg_loss_training)
+        metriclogs["train_loss"].append(avg_loss_training)
         print("train step took %0.1f s" % (stop_time - start_time))
         print("train loss = %0.2f" % (avg_loss_training))
 
@@ -223,6 +228,9 @@ def train(args):
         metriclogs["val_loss"].append(valset_eval[0])
         print("val step took %0.1f s" % (stop_time - start_time))
         print("val loss = %0.2f" % (valset_eval[0]))
+        print(
+            f"[Epoch {epoch}|val]\t{(stop_time - start_time):.2f} s\t{(valset_eval[0]):.4f}"
+        )
 
         # validate on test set (peeking)
         start_time = time.time()
@@ -231,15 +239,23 @@ def train(args):
         metriclogs["test_loss"].append(testset_eval[0])
         print("test step took %0.1f s" % (stop_time - start_time))
         print("test loss = %0.2f" % (testset_eval[0]))
+        print(
+            f"[Epoch {epoch}|test]\t{(stop_time - start_time):.2f} s\t{(testset_eval[0]):.4f}"
+        )
 
         # update lr scheduler
         scheduler.step(valset_eval[0])
 
         # periodically save model checkpoints and metrics
-        epoch_checkpoint_file = "./epoch_%02d" % epoch + ".pth"
-        epoch_checkpoint_save_path = os.path.join(
-           args.checkpoint_dir, epoch_checkpoint_file
-        )
+        epoch_checkpoint_file = "epoch_%02d" % epoch + ".pth"
+        if (args.local):
+            epoch_checkpoint_save_path = os.path.join(
+               args.model_dir, epoch_checkpoint_file
+            )
+        else:
+            epoch_checkpoint_save_path = os.path.join(
+               args.checkpoint_dir, epoch_checkpoint_file
+            )
         torch.save(
             {
                 "epoch": epoch,
@@ -258,7 +274,10 @@ def train(args):
         )
 
         if (min_val_loss is None or valset_eval[0] < min_val_loss):
-            print(f"updating final model (epoch={epoch}), lowest val loss ({valset_eval[0]} < {min_val_loss})")
+            if (min_val_loss is None):
+                print(f"updating final model (epoch={epoch}), first val loss ({valset_eval[0]:0.3f})")
+            else:
+                print(f"updating final model (epoch={epoch}), lowest val loss ({valset_eval[0]:0.3f} < {min_val_loss:0.3f})")
             final_model_path = os.path.join(args.model_dir, "model.pth")
             shutil.copy(epoch_checkpoint_save_path, final_model_path)
             min_val_loss = valset_eval[0]
@@ -298,8 +317,11 @@ if __name__ == "__main__":
     parser.add_argument("--values-dir", type=str, default=os.environ["SM_CHANNEL_VALUES"])
     parser.add_argument("--num-gpus", type=int, default=os.environ["SM_NUM_GPUS"])
 
-    # hyperparameters
+    parser.add_argument("--num-workers", type=int, default=4, help="number of data loader workers")
     parser.add_argument("--gpu", type=int, default=0, help="index of the GPU to use")
+    parser.add_argument("--local", type=bool, default=False, help="running in local mode")
+
+    # hyperparameters
     parser.add_argument("--epochs", type=int, default=15, help="number of epochs")
     parser.add_argument("--lr", type=float, default=0.001, help="learning rate")
     parser.add_argument(

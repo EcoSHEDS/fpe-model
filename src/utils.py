@@ -247,7 +247,6 @@ def fit(model, criterion, optimizer, train_dl, device, epoch_num=None, verbose=F
     Returns:
         batch_loss_logger.avg (float): average criterion loss per batch during training
     """
-    print("Training")
     model.train()  # ensure model is in train mode
     # train_dl.dataset.train()  # ensure train transforms are applied
     batch_loss_logger = MetricLogger()
@@ -291,7 +290,7 @@ def fit(model, criterion, optimizer, train_dl, device, epoch_num=None, verbose=F
             )
 
     print(
-        f"[Epoch {epoch_num}]\t{batch_time_logger.sum:.2f} s\t{batch_loss_logger.avg:.4f}"
+        f"[Epoch {epoch_num}|train]\t{batch_time_logger.sum:.2f} s\t{batch_loss_logger.avg:.4f}"
     )
 
     return batch_loss_logger.avg
