@@ -25,8 +25,9 @@ def generate_datasets(args):
     output_dir = args.output_dir
     if (output_dir is None):
         output_dir = os.path.join(os.path.dirname(args.data_file), "splits")
-        if not os.path.exists(output_dir):
-            os.makedirs(output_dir)
+
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
 
     print("split flow-images into train/val/test using random stratified week")
     try:

@@ -1,6 +1,7 @@
 import argparse
 import ast
 import os
+import shutil
 import time
 import json
 import pandas as pd
@@ -146,13 +147,13 @@ def train(args):
     print("creating data loaders")
     # TODO: do we need worker_init_fn here for reproducibility?
     train_dl = torch.utils.data.DataLoader(
-        train_ds, batch_size=args.batch_size, shuffle=True, num_workers=1
+        train_ds, batch_size=args.batch_size, shuffle=True, num_workers=4
     )
     val_dl = torch.utils.data.DataLoader(
         val_ds, batch_size=args.batch_size, shuffle=False, num_workers=4
     )
     test_dl = torch.utils.data.DataLoader(
-        test_ds, batch_size=args.batch_size, shuffle=False, num_workers=1
+        test_ds, batch_size=args.batch_size, shuffle=False, num_workers=4
     )
 
     # # # # # # # # # # # # # # # # # # # # # # # # #
@@ -173,27 +174,21 @@ def train(args):
         pretrained=True,
     )
 
-    #model = torch.nn.DataParallel(
-    #    model,
-    #    device_ids=[args.gpu,],
-    #)
-    model.to(device)
-
-    # # # # # # # # # # # # # # # # # # # # # # # # #
-    # INITIALIZE LOSS, OPTIMIZER
-    # # # # # # # # # # # # # # # # # # # # # # # # #
-    criterion = RankNetLoss()
-    optimizer = torch.optim.SGD(model.parameters(), lr=args.lr, momentum=0.9)
-
-    # # # # # # # # # # # # # # # # # # # # # # # # #
-    # FREEZE RESNET BACKBONE
-    # # # # # # # # # # # # # # # # # # # # # # # # #
+    # freeze resnet backbone
     for p in list(model.children())[0].parameters():
         p.requires_grad = False
 
+    model = torch.nn.DataParallel(
+       model,
+       device_ids=[args.gpu,],
+    )
+    model.to(device)
+
     # # # # # # # # # # # # # # # # # # # # # # # # #
-    # INITIALIZE LR SCHEDULER WITH OPTIMIZER
+    # INITIALIZE LOSS, OPTIMIZER, SCHEDULER
     # # # # # # # # # # # # # # # # # # # # # # # # #
+    criterion = RankNetLoss()
+    optimizer = torch.optim.SGD(model.parameters(), lr=args.lr, momentum=0.9)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
         optimizer, "min", patience=1, factor=0.5
     )
@@ -212,38 +207,39 @@ def train(args):
     print("start training")
     min_val_loss = None
     for epoch in range(0, args.epochs):
-        # train
         start_time = time.time()
         avg_loss_training = fit(
             model, criterion, optimizer, train_dl, device, epoch_num=epoch
         )
         stop_time = time.time()
-        print("training epoch took %0.1f s" % (stop_time - start_time))
         metriclogs["training_loss"].append(avg_loss_training)
+        print("train step took %0.1f s" % (stop_time - start_time))
+        print("train loss = %0.2f" % (avg_loss_training))
 
         # validate on val set
         start_time = time.time()
         valset_eval = validate(model, [criterion], val_dl, device)
         stop_time = time.time()
-        print("valset eval took %0.1f s" % (stop_time - start_time))
         metriclogs["val_loss"].append(valset_eval[0])
+        print("val step took %0.1f s" % (stop_time - start_time))
+        print("val loss = %0.2f" % (valset_eval[0]))
 
         # validate on test set (peeking)
         start_time = time.time()
         testset_eval = validate(model, [criterion], test_dl, device)
         stop_time = time.time()
-        print("testset eval took %0.1f s" % (stop_time - start_time))
         metriclogs["test_loss"].append(testset_eval[0])
+        print("test step took %0.1f s" % (stop_time - start_time))
+        print("test loss = %0.2f" % (testset_eval[0]))
 
         # update lr scheduler
         scheduler.step(valset_eval[0])
 
         # periodically save model checkpoints and metrics
         epoch_checkpoint_file = "./epoch_%02d" % epoch + ".pth"
-        #epoch_checkpoint_save_path = os.path.join(
-        #    args.checkpoint_dir, epoch_checkpoint_file
-        #)
-        epoch_checkpoint_save_path = epoch_checkpoint_file
+        epoch_checkpoint_save_path = os.path.join(
+           args.checkpoint_dir, epoch_checkpoint_file
+        )
         torch.save(
             {
                 "epoch": epoch,
@@ -262,25 +258,9 @@ def train(args):
         )
 
         if (min_val_loss is None or valset_eval[0] < min_val_loss):
-            print(f"lowest val loss so far, saving to final destination (epoch={epoch})")
-
+            print(f"updating final model (epoch={epoch}), lowest val loss ({valset_eval[0]} < {min_val_loss})")
             final_model_path = os.path.join(args.model_dir, "model.pth")
-            torch.save(
-                {
-                    "epoch": epoch,
-                    "model_state_dict": model.state_dict(),
-                    "optimizer_state_dict": optimizer.state_dict(),
-                    "training_loss": avg_loss_training,
-                    "transforms": image_transforms,
-                    "params": {
-                        "aspect": aspect,
-                        "input_shape": input_shape,
-                        "img_sample_mean": img_sample_mean,
-                        "img_sample_std": img_sample_std
-                    }
-                },
-                final_model_path,
-            )
+            shutil.copy(epoch_checkpoint_save_path, final_model_path)
             min_val_loss = valset_eval[0]
 
         metrics_checkpoint_file = "metrics_per_epoch.json"
@@ -292,7 +272,7 @@ def train(args):
 
         #  after [unfreeze_after] epochs, unfreeze the pretrained body network parameters
         if (epoch + 1) == args.unfreeze_after:
-            print("UNFREEZING CNN BODY")
+            print(f"unfreezing cnn body after epoch={epoch}")
             for p in list(model.children())[0].parameters():
                 p.requires_grad = True
 
