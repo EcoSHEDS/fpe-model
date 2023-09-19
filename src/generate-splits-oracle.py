@@ -38,10 +38,9 @@ def generate_datasets(args):
     train_df, val_df, test_df = splits["train"], splits["val"], splits["test"]
 
     print("saving flow-images splits to csv")
-    data_file_filename = os.path.split(args.data_file)[-1]
-    train_df.to_csv(os.path.join(output_dir, data_file_filename.replace(".csv", "-train.csv")))
-    val_df.to_csv(os.path.join(output_dir, data_file_filename.replace(".csv", "-val.csv")))
-    test_df.to_csv(os.path.join(output_dir, data_file_filename.replace(".csv", "-test.csv")))
+    train_df.to_csv(os.path.join(output_dir, "images-train.csv"))
+    val_df.to_csv(os.path.join(output_dir, "images-val.csv"))
+    test_df.to_csv(os.path.join(output_dir, "images-test.csv"))
 
     print("creating flow photo ranking datasets")
     train_ds = FlowPhotoRankingDataset(train_df, os.path.dirname(args.data_file))

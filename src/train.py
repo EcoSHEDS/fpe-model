@@ -88,7 +88,7 @@ def train(args):
     # list_all_files(args.images_dir)
 
     print(f"values_dir: {args.values_dir}")
-    # list_all_files(args.values_dir)
+    list_all_files(args.values_dir)
 
     print(f"output_dir: {args.output_dir}")
 
