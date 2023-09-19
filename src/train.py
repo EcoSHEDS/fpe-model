@@ -146,13 +146,13 @@ def train(args):
     print("creating data loaders")
     # TODO: do we need worker_init_fn here for reproducibility?
     train_dl = torch.utils.data.DataLoader(
-        train_ds, batch_size=args.batch_size, shuffle=True, num_workers=4
+        train_ds, batch_size=args.batch_size, shuffle=True, num_workers=1
     )
     val_dl = torch.utils.data.DataLoader(
         val_ds, batch_size=args.batch_size, shuffle=False, num_workers=4
     )
     test_dl = torch.utils.data.DataLoader(
-        test_ds, batch_size=args.batch_size, shuffle=False, num_workers=4
+        test_ds, batch_size=args.batch_size, shuffle=False, num_workers=1
     )
 
     # # # # # # # # # # # # # # # # # # # # # # # # #
@@ -172,10 +172,11 @@ def train(args):
         truncate=2,
         pretrained=True,
     )
-    model = torch.nn.DataParallel(
-        model,
-        device_ids=[args.gpu,],
-    )
+
+    #model = torch.nn.DataParallel(
+    #    model,
+    #    device_ids=[args.gpu,],
+    #)
     model.to(device)
 
     # # # # # # # # # # # # # # # # # # # # # # # # #
@@ -239,9 +240,10 @@ def train(args):
 
         # periodically save model checkpoints and metrics
         epoch_checkpoint_file = "./epoch_%02d" % epoch + ".pth"
-        epoch_checkpoint_save_path = os.path.join(
-            args.checkpoint_dir, epoch_checkpoint_file
-        )
+        #epoch_checkpoint_save_path = os.path.join(
+        #    args.checkpoint_dir, epoch_checkpoint_file
+        #)
+        epoch_checkpoint_save_path = epoch_checkpoint_file
         torch.save(
             {
                 "epoch": epoch,
