@@ -1,5 +1,5 @@
 ---
-title: "Rank Model Predictions | `r params$site`"
+title: "Rank Model Predictions | `r params$site` | `r params$model_id`"
 format:
   html:
     toc: true
@@ -7,9 +7,9 @@ format:
     page-layout: full
     self-contained: true
 params:
-  site: "AVERYBB"
   root_dir: "D:/fpe/sites"
-  filename: "predictions.csv"
+  site: "WESTB0"
+  model_id: "20230920"
 editor_options: 
   chunk_output_type: console
 ---
@@ -25,47 +25,51 @@ knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE, fig.width 
 
 # params <- list(
 #   root_dir = "D:/fpe/sites",
-#   site = "AVERYBB",
-#   filename = "predictions.csv"
+#   site = "VLYB",
+#   model_id = "20230922"
 # )
 
-pred_file <- file.path(params$root_dir, params$site, "transform", params$filename)
-station_file <- file.path(params$root_dir, params$site, "data", "station.json")
-flow_images_file <- file.path(params$root_dir, params$site, "data", "flow-images-train.csv")
-args_file <- file.path(params$root_dir, params$site, "model", "output", "args.json")
-train_file <- file.path(params$root_dir, params$site, "model", "output", "train_pairs.csv")
-val_file <- file.path(params$root_dir, params$site, "model", "output", "val_pairs.csv")
-test_file <- file.path(params$root_dir, params$site, "model", "output", "test_pairs.csv")
+site_dir <- file.path(params$root_dir, params$site)
+model_dir <- file.path(site_dir, "models", params$model_id)
+
+split_args_file <- file.path(model_dir, "input", "args.json")
+metrics_file <- file.path(model_dir, "output", "metrics.csv")
+pred_file <- file.path(model_dir, "transform", "predictions.csv")
+station_file <- file.path(site_dir, "data", "station.json")
+flow_images_file <- file.path(site_dir, "data", "flow-images-train.csv")
+train_args_file <- file.path(model_dir, "output", "args.json")
+train_file <- file.path(model_dir, "input", "pairs-train.csv")
+val_file <- file.path(model_dir, "input", "pairs-val.csv")
+test_file <- file.path(model_dir, "input", "pairs-test.csv")
 ```
 
 ```{r load}
 stn <- jsonlite::read_json(station_file)
-args <- jsonlite::read_json(args_file)
+split_args <- jsonlite::read_json(split_args_file)
+if (split_args$method == "oracle") {
+  split_args$num_val_pairs <- split_args$num_eval_pairs
+  split_args$num_test_pairs <- split_args$num_eval_pairs
+  split_args$notes <- "N/A"
+}
+train_args <- jsonlite::read_json(train_args_file)
+
+metrics <- read_csv(metrics_file, show_col_types = FALSE)
+
 flow_images <- read_csv(flow_images_file, show_col_types = FALSE)
-train_pairs <- read_csv(train_file, show_col_types = FALSE)
-val_pairs <- read_csv(val_file, show_col_types = FALSE)
-test_pairs <- read_csv(test_file, show_col_types = FALSE)
+
+pairs_train <- read_csv(train_file, show_col_types = FALSE)
+pairs_val <- read_csv(val_file, show_col_types = FALSE)
+pairs_test <- read_csv(test_file, show_col_types = FALSE)
 
 pairs <- bind_rows(
-  train = train_pairs,
-  val = val_pairs,
-  test = test_pairs,
+  train = pairs_train,
+  val = pairs_val,
+  test = pairs_test,
   .id = "split"
-) %>%
-  mutate(split = factor(split, levels = c("train", "val", "test"))) %>%
-  left_join(
-    flow_images %>%
-      select(fn1 = filename, timestamp_1 = timestamp, flow_1 = flow_cfs),
-    by = "fn1"
-  ) %>%
-  left_join(
-    flow_images %>%
-      select(fn2 = filename, timestamp_2 = timestamp, flow_2 = flow_cfs),
-    by = "fn2"
-  )
+)
 pairs <- bind_rows(
-  `1` = select(pairs, split, image_id = idx1, timestamp = timestamp_1, flow = flow_1),
-  `2` = select(pairs, split, image_id = idx2, timestamp = timestamp_2, flow = flow_2),
+  `1` = select(pairs, split, image_id = image_id_1, timestamp = timestamp_1, label = label_1),
+  `2` = select(pairs, split, image_id = image_id_2, timestamp = timestamp_2, label = label_2),
   .id = "i"
 )
 splits <- pairs %>% 
@@ -116,50 +120,128 @@ pred_day <- pred %>%
   complete(date = seq.Date(min(pred$date), max(pred$date), by = "1 day")) %>% 
   mutate(split = factor(coalesce(split, "N/A"), levels = levels(pred$split)))
 
-tau <- pred %>% 
-  bind_rows(
-    pred %>% 
-      transmute(
-        split = "total",
-        flow_cfs,
-        score
-      )
-  ) %>% 
-  filter(!is.na(score)) %>% 
-  group_by(split) %>% 
-  summarise(
-    n = sum(!is.na(score)),
-    tau = cor(flow_cfs, score, method = "kendall", use = "complete.obs")
-  ) %>%
-  select(split, tau) %>% 
-  deframe()
+if (any(!is.na(pred$flow_cfs))) {
+  tau <- pred %>% 
+    bind_rows(
+      pred %>% 
+        transmute(
+          split = "total",
+          flow_cfs,
+          score
+        )
+    ) %>% 
+    filter(!is.na(score)) %>% 
+    group_by(split) %>% 
+    summarise(
+      n = sum(!is.na(score)),
+      tau = cor(flow_cfs, score, method = "kendall", use = "complete.obs")
+    ) %>%
+    select(split, tau) %>% 
+    deframe()
+  
+  tau_day <- pred_day %>% 
+    bind_rows(
+      pred_day %>% 
+        transmute(
+          split = "total",
+          flow_cfs,
+          score
+        )
+    ) %>% 
+    filter(!is.na(score)) %>% 
+    group_by(split) %>% 
+    summarise(
+      n = sum(!is.na(score)),
+      tau = cor(flow_cfs, score, method = "kendall", use = "complete.obs")
+    ) %>%
+    select(split, tau) %>% 
+    deframe()
+} else {
+  pred$rank_obs <- NA_real_
+  pred$rank_resid <- NA_real_
+  pred_day$rank_obs <- NA_real_
+  pred_day$rank_resid <- NA_real_
+
+  tau <- list(
+    train = NA_real_,
+    val = NA_real_,
+    test = NA_real_,
+    total = NA_real_
+  )
+  tau_day <- list(
+    train = NA_real_,
+    val = NA_real_,
+    test = NA_real_,
+    total = NA_real_
+  )
+}
+
 ```
 
 ```txt
 Report Generated: `r Sys.time()`
 
 Station:   `r stn$name`
-File:      `r pred_file`
+Model ID:  `r params$model_id`
+Folder:    `r model_dir`
 
-Start:    `r min(pred$timestamp)`
-End:      `r max(pred$timestamp)`
-# Images: `r scales::comma(nrow(pred))`
+Dataset:
+  Start:    `r min(pred$timestamp)`
+  End:      `r max(pred$timestamp)`
+  # Images: `r scales::comma(nrow(pred))`
 
-Tau:      
+Annotations:
+  Method:        `r split_args$method`
+  Margin:        `r if_else(split_args$method == "oracle", paste0(split_args$margin, " (", split_args$margin_mode, ")"), "N/A")`
+  # Train Pairs: `r split_args$num_train_pairs`
+  # Val Pairs:   `r split_args$num_val_pairs`
+  # Test Pairs:  `r split_args$num_test_pairs`
+  Notes:         `r split_args$notes`
+
+Training Params:
+  # Epochs:      `r train_args$epochs`
+  Learn Rate:    `r train_args$lr`
+
+Performance (Kendall Tau):      
   Train:   `r sprintf("%.2f", tau["train"])`
   Val:     `r sprintf("%.2f", tau["val"])`
   Test:    `r sprintf("%.2f", tau["test"])`
   Overall: `r sprintf("%.2f", tau["total"])`
-
-Training Params:
-  # Epochs:      `r args$epochs`
-  Learn Rate:    `r args$lr`
-  # Train Pairs: `r args$num_train_pairs`
-  # Eval Pairs:  `r args$num_eval_pairs`
-  Annotator:     oracle
-  Margin Mode:   `r args$margin_mode`
-  Margin:        `r args$margin`
 ```
+
+## Training Loss
+
+```{r train_loss, fig.width=8, fig.height=4}
+metrics %>% 
+  mutate(final = val_loss == min(val_loss)) %>% 
+  pivot_longer(-c(epoch, final), names_to = "split") %>% 
+  mutate(
+    split = factor(str_remove(split, "_loss"), levels = c("train", "val", "test"))
+  ) %>% 
+  ggplot(aes(epoch, value, color = split)) +
+  geom_point() +
+  geom_line() +
+  geom_point(
+    data = ~ filter(., final),
+    aes(size = "Final Model"),
+    shape = 21, color = "black"
+  ) +
+  scale_x_continuous(breaks = scales::pretty_breaks(n = 10)) +
+  scale_y_continuous(limits = c(0, NA), expand = expansion(c(0, 0.05))) +
+  scale_color_brewer("Split", palette = "Set1") +
+  scale_size_manual(values = 5) +
+  guides(
+    color = guide_legend(order = 1),
+    size = guide_legend(order = 2)
+  ) +
+  labs(
+    x = "Epoch",
+    y = "Loss",
+    size = NULL
+  ) +
+  theme_bw()
+```
+
 
 ## Timeseries
 
@@ -171,8 +253,11 @@ pred %>%
   geom_line() +
   geom_point(
     data = pairs %>% 
-      mutate(flow = log10(flow)) %>% 
-      mutate(name = "log(flow_cfs)"),
+      mutate(
+        flow = log10(label),
+        name = "log(flow_cfs)",
+        split = factor(split, levels = levels(pred$split))
+      ),
     aes(y = flow, color = split),
     size = 0.5
   ) +
@@ -181,11 +266,7 @@ pred %>%
     name = c("log(flow_cfs)" = "Obs log10(Flow [cfs])", "score" = "Pred Score")
   )) +
   labs(x = "Date", y = NULL) +
-  scale_color_brewer("Split", palette = "Set1", labels = c(
-    "train" = "Train",
-    "val" = "Validation", 
-    "test" = "Test"
-  )) +
+  scale_color_brewer("Split", palette = "Set1") +
   labs(
     x = "Date",
     title = "Timeseries of Observed Flow and Predicted Scores"
@@ -204,12 +285,12 @@ pred %>%
   filter(!is.na(split)) %>% 
   ggplot(aes(timestamp)) +
   geom_line(aes(y = rank_pred, linetype = "Predicted"), color = "black") +
-  geom_point(aes(y = rank_obs, color = split), size = 0.5) +
+  geom_point(aes(y = rank_obs, color = split), size = 1, alpha = 0.5) +
   scale_color_brewer("Split", palette = "Set1") +
   scale_x_datetime(date_labels = "%b %Y", date_breaks = "2 months", expand = expansion()) +
   scale_y_continuous(breaks = scales::pretty_breaks(n = 8), labels = scales::percent_format(accuracy = 1), expand = expansion()) +
   guides(
-    color = guide_legend(override.aes = list(size = 1))
+    color = guide_legend(override.aes = list(size = 1, alpha = 1))
   ) +
   labs(
     x = "Date",
@@ -222,12 +303,12 @@ pred %>%
 
 ## Scatter Plots
 
-```{r splot}
+```{r splot, fig.height=12}
 p1 <- pred %>%
   filter(!is.na(split)) %>% 
   ggplot(aes(flow_cfs, score)) +
   geom_point(aes(color = split), size = 0.5, alpha = 0.5) +
-  geom_smooth(method = "loess", span = 0.9, se = FALSE, formula = y ~ x, color = "black") +
+  geom_smooth(method = "lm", se = FALSE, formula = y ~ x, color = "black") +
   scale_color_brewer("Split", palette = "Set1") +
   scale_x_log10() +
   labs(
@@ -236,6 +317,7 @@ p1 <- pred %>%
     title = "Observed Flow vs Predicted Score"
   ) +
   guides(color = guide_legend(override.aes = list(size = 1))) +
+  facet_wrap(vars(split), ncol = 1) +
   theme_bw() +
   theme(aspect.ratio = 1)
 p2 <- pred %>%
@@ -252,15 +334,20 @@ p2 <- pred %>%
     title = "Observed vs. Predicted Ranks"
   ) +
   guides(color = guide_legend(override.aes = list(size = 1))) +
+  facet_wrap(vars(split), ncol = 1) +
   theme_bw() +
   theme(aspect.ratio = 1)
-wrap_plots(p1, p2, nrow = 1) +
-  plot_layout(guides = "collect")
+if (any(!is.na(pred$flow_cfs))) {
+  wrap_plots(p1, p2, nrow = 1) +
+    plot_layout(guides = "collect")
+} else {
+  print("No obs.")
+}
 ```
 
 ## Residuals
 
-```{r resid_ts, fig.height=4}
+```{r resid_ts}
 pred %>%
   filter(!is.na(split)) %>% 
   ggplot(aes(timestamp, rank_resid)) +
@@ -270,6 +357,7 @@ pred %>%
   scale_x_datetime(date_labels = "%b %Y", date_breaks = "2 months", expand = expansion()) +
   scale_y_continuous(breaks = scales::pretty_breaks(n = 8), labels = scales::percent_format(accuracy = 1), expand = expansion()) +
   guides(color = guide_legend(override.aes = list(size = 1))) +
+  facet_wrap(vars(split)) +
   labs(
     x = "Date",
     y = "Percentile Rank Residual (Obs-Pred)",
@@ -278,7 +366,7 @@ pred %>%
   theme_bw()
 ```
 
-```{r resid_splot}
+```{r resid_splot, fig.height = 12}
 p1 <- pred %>%
   filter(!is.na(split)) %>% 
   ggplot(aes(rank_pred, rank_resid)) +
@@ -287,8 +375,9 @@ p1 <- pred %>%
   geom_point(aes(color = split), size = 0.5, alpha = 0.5) +
   scale_color_brewer("Split", palette = "Set1") +
   scale_y_continuous(breaks = scales::pretty_breaks(n = 8), labels = scales::percent_format(accuracy = 1), expand = expansion()) +
-  scale_x_continuous(breaks = scales::pretty_breaks(n = 8), labels = scales::percent_format(accuracy = 1), expand = expansion(), limits = c(0, 1)) +
+  scale_x_continuous(breaks = scales::pretty_breaks(n = 4), labels = scales::percent_format(accuracy = 1), expand = expansion(), limits = c(0, 1)) +
   guides(color = guide_legend(override.aes = list(size = 1))) +
+  facet_wrap(vars(split), ncol = 1) +
   labs(
     x = "Predicted Percentile Rank",
     y = "Percentile Rank Residual (Obs-Pred)",
@@ -303,9 +392,10 @@ p2 <- pred %>%
   geom_hline(yintercept = 0) +
   geom_jitter(aes(color = split), height = 0, size = 0.5, alpha = 0.5) +
   scale_color_brewer("Split", palette = "Set1") +
-  scale_y_continuous(breaks = scales::pretty_breaks(n = 8), labels = scales::percent_format(accuracy = 1), expand = expansion()) +
+  scale_y_continuous(breaks = scales::pretty_breaks(n = 6), labels = scales::percent_format(accuracy = 1), expand = expansion()) +
   scale_x_continuous(breaks = scales::pretty_breaks(n = 10)) +
   guides(color = guide_legend(override.aes = list(size = 1))) +
+  facet_wrap(vars(split), ncol = 1) +
   labs(
     x = "Hour of Day",
     y = "Percentile Rank Residual (Obs-Pred)",
@@ -321,8 +411,9 @@ p3 <- pred %>%
   geom_jitter(aes(color = split), height = 0, size = 0.5, alpha = 0.5) +
   scale_color_brewer("Split", palette = "Set1") +
   scale_y_continuous(breaks = scales::pretty_breaks(n = 8), labels = scales::percent_format(accuracy = 1), expand = expansion()) +
-  scale_x_date(date_breaks = "2 months", date_labels = "%b %d") +
+  scale_x_date(date_breaks = "2 months", date_labels = "%b", limits = ymd(c(20010101, 20011231)), expand = expansion()) +
   guides(color = guide_legend(override.aes = list(size = 1))) +
+  facet_wrap(vars(split), ncol = 1) +
   labs(
     x = "Day of Year",
     y = "Percentile Rank Residual (Obs-Pred)",
@@ -330,13 +421,26 @@ p3 <- pred %>%
   ) +
   theme_bw() +
   theme(aspect.ratio = 1)
-
-wrap_plots(p1, p2, p3, nrow = 1) +
-  plot_layout(guides = "collect")
+if (any(!is.na(pred$flow_cfs))) {
+  wrap_plots(p1, p2, p3, nrow = 1) +
+    plot_layout(guides = "collect")
+} else {
+  print("No obs.")
+}
 ```
 
 
 ## Daily Aggregation
+
+Note: excludes nighttime images and observed flows
+
+```text
+Performance (Kendall Tau):      
+  Train:   `r sprintf("%.2f", tau_day["train"])`
+  Val:     `r sprintf("%.2f", tau_day["val"])`
+  Test:    `r sprintf("%.2f", tau_day["test"])`
+  Overall: `r sprintf("%.2f", tau_day["total"])`
+```
 
 ```{r day_ts, fig.height=4}
 pred_day %>%
@@ -356,19 +460,20 @@ pred_day %>%
 ```
 
 
-```{r day_splot, fig.width=4, fig.height=4}
+```{r day_splot, fig.height=4}
 pred_day %>%
   ggplot(aes(rank_obs, rank_pred)) +
   geom_point(aes(color = split), size = 1, alpha = 0.5) +
   geom_abline(color = "black") +
   scale_color_brewer("Split", palette = "Set1") +
-  scale_x_continuous(breaks = scales::pretty_breaks(), expand = expansion(), limits = c(0, NA)) +
-  scale_y_continuous(breaks = scales::pretty_breaks(), expand = expansion(), limits = c(0, NA)) +
+  scale_x_continuous(breaks = scales::pretty_breaks(), expand = expansion(), limits = c(0, 1), labels = scales::percent) +
+  scale_y_continuous(breaks = scales::pretty_breaks(), expand = expansion(), limits = c(0, 1), labels = scales::percent) +
   labs(
     x = "Observed Rank",
     y = "Predicted Rank",
     title = "Observed vs. Predicted Daily Ranks"
   ) +
+  facet_wrap(vars(split), nrow = 1) +
   theme_bw() +
   theme(aspect.ratio = 1)
 ```

@@ -89,7 +89,7 @@ def train(args):
     # list_all_files(args.images_dir)
 
     print(f"values_dir: {args.values_dir}")
-    list_all_files(args.values_dir)
+    # list_all_files(args.values_dir)
 
     print(f"output_dir: {args.output_dir}")
 
@@ -201,6 +201,7 @@ def train(args):
     # INITIALIZE LOSS LOGS
     # # # # # # # # # # # # # # # # # # # # # # # # #
     metriclogs = {}
+    metriclogs["epoch"] = []
     metriclogs["train_loss"] = []
     metriclogs["val_loss"] = []
     metriclogs["test_loss"] = []
@@ -212,6 +213,9 @@ def train(args):
     min_val_loss = None
     for epoch in range(0, args.epochs):
         print(f"start training (epoch={epoch})")
+
+        metriclogs["epoch"].append(epoch)
+
         start_time = time.time()
         avg_loss_training = fit(
             model, criterion, optimizer, train_dl, device, epoch_num=epoch
@@ -282,12 +286,11 @@ def train(args):
             shutil.copy(epoch_checkpoint_save_path, final_model_path)
             min_val_loss = valset_eval[0]
 
-        metrics_checkpoint_file = "metrics_per_epoch.json"
+        metrics_checkpoint_file = "metrics.csv"
         metrics_checkpoint_save_path = os.path.join(
             output_data_dir, metrics_checkpoint_file
         )
-        with open(metrics_checkpoint_save_path, "w") as f:
-            json.dump(metriclogs, f)
+        pd.DataFrame(metriclogs).to_csv(metrics_checkpoint_save_path, index=False)
 
         #  after [unfreeze_after] epochs, unfreeze the pretrained body network parameters
         if (epoch + 1) == args.unfreeze_after:

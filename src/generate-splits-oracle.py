@@ -29,6 +29,10 @@ def generate_datasets(args):
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
 
+    with open(os.path.join(output_dir, "args.json"), "w") as f:
+        json.dump(vars(args), f, indent = 2)
+    print(f'saved args: {os.path.join(output_dir, "args.json")}')
+
     print("split flow-images into train/val/test using random stratified week")
     try:
         splits = RandomStratifiedWindowFlow().split(df, 0.8, 0.1, 0.1)
@@ -39,9 +43,9 @@ def generate_datasets(args):
     train_df, val_df, test_df = splits["train"], splits["val"], splits["test"]
 
     print("saving flow-images splits to csv")
-    train_df.to_csv(os.path.join(output_dir, "images-train.csv"))
-    val_df.to_csv(os.path.join(output_dir, "images-val.csv"))
-    test_df.to_csv(os.path.join(output_dir, "images-test.csv"))
+    train_df.to_csv(os.path.join(output_dir, "images-train.csv"), index=False)
+    val_df.to_csv(os.path.join(output_dir, "images-val.csv"), index=False)
+    test_df.to_csv(os.path.join(output_dir, "images-test.csv"), index=False)
 
     print("creating flow photo ranking datasets")
     train_ds = FlowPhotoRankingDataset(train_df, os.path.dirname(args.data_file))
@@ -143,6 +147,13 @@ if __name__ == "__main__":
         help="filename of CSV file with linked images and flows",
     )
 
+    parser.add_argument(
+        "--method",
+        type=str,
+        default="oracle",
+        choices=["oracle", "human"],
+        help="method for generating image pair dataset",
+    )
     parser.add_argument(
         "--margin-mode",
         type=str,
