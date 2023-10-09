@@ -1,12 +1,35 @@
-import os
-import argparse
-import requests  # request img from web
-import shutil  # save img locally
-import pandas as pd
-from tqdm import tqdm
-from torchvision.io import read_image
+""" Download images from urls in a csv file.
 
-# from PIL import Image
+This script downloads images from urls in a csv file and saves them to a
+specified directory. It also checks that the downloaded images are valid.
+
+The csv file should have the following columns:
+    - url: url to download image from
+    - filename: filename to save image as
+
+Example usage:
+    python download_images.py \
+        --data-root-dir /path/to/fpe_stations/AVERYBB \
+        --data-filename AVERYBB-20230829/data/flow-images.csv \
+        --image-base-dir ''
+
+This opens /path/to/fpe_stations/AVERYBB/AVERYBB-20230829/data/flow-images.csv
+and downloads images to /path/to/fpe_stations/AVERYBB/ with the same filename
+as in the csv file. In this case, the csv file has filenames starting with
+imagesets/ so images are saved to/path/to/fpe_stations/AVERYBB/imagesets/...
+This allows multiple snapshots of the same station to be saved without
+duplicating image files.
+
+"""
+
+import argparse
+import os
+import shutil  # save img locally
+
+import pandas as pd
+import requests  # request img from web
+from torchvision.io import read_image
+from tqdm import tqdm
 
 
 def download_image_from_url(url, save_path):
@@ -20,7 +43,7 @@ def download_image_from_url(url, save_path):
 
 def check_downloaded_image(image_path, url):
     try:
-        image = read_image(image_path)
+        read_image(image_path)
     except Exception as e:
         print(f"Cannot read image {image_path}")
         print(e)
@@ -30,9 +53,17 @@ def check_downloaded_image(image_path, url):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="")
-    parser.add_argument("--data-root-dir", required=True, help="random seed")
-    parser.add_argument("--data-filename", required=True, help="random seed")
-    parser.add_argument("--image-base-dir", required=True, help="random seed")
+    parser.add_argument("--data-root-dir", required=True, help="Dataset root directory")
+    parser.add_argument(
+        "--data-filename",
+        required=True,
+        help="CSV file containing image urls",
+    )
+    parser.add_argument(
+        "--image-base-dir",
+        required=True,
+        help="Directory within dataset root directory to save images",
+    )
     args = parser.parse_args()
 
     datafile = os.path.join(args.data_root_dir, args.data_filename)
@@ -45,6 +76,7 @@ if __name__ == "__main__":
         out_file_path = os.path.join(outdir, out_file_name)
 
         if not os.path.exists(out_file_path):
+            os.makedirs(os.path.dirname(out_file_path), exist_ok=True)
             download_image_from_url(url, out_file_path)
 
     print("Checking downloaded images...")
