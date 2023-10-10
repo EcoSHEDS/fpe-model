@@ -6,10 +6,14 @@ min-hour: 7
 max-hour: 18
 
 # Ranking data options
-margin-mode: relative
-margin: 0.1
 num-train-pairs: 5000
 num-eval-pairs: 1000
+pair-sampling-method: random_pairs
+pair-annotation-method: oracle
+margin-mode: relative
+margin: 0.1
+# annotation-method-kwargs: {"oracle-margin-mode": "relative", "oracle-margin": 0.1}
+# annotator-file
 
 # Model training options
 epochs: 30
