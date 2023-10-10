@@ -3,6 +3,7 @@ import random
 from typing import Dict, Tuple
 import numpy as np
 import pandas as pd
+from abc import ABC, abstractmethod
 from itertools import combinations
 from PIL import Image, ImageStat
 from torch.utils.data import Dataset
@@ -217,76 +218,242 @@ class FlowPhotoRankingDataset(FlowPhotoDataset):
         annotated_pairs.extend([(p[1], p[0], -1 * p[2]) for p in annotated_pairs])
         self.ranked_image_pairs.extend(annotated_pairs)
 
-    def rank_image_pairs(self, pair_sampling_fn, num_pairs, margin=0, mode="relative"):
+    # def rank_image_pairs(self, pair_sampling_fn, num_pairs, margin=0, mode="relative"):
+    def rank_image_pairs(self, num_pairs, **kwargs):
         """Rank image pairs using a simulated oracle.
 
         This procedure comprises two stages. The first stage is to sample
         image pairs from the dataset. The second stage is to label the image
         pairs as a simulated oracle would.
         """
+        # get pair sampling function from kwargs
+        pair_sampling_fn = kwargs.get("pair_sampling_fn")
         self.image_pair_sampler = ImagePairSampler(self.table, pair_sampling_fn)
         self.sampled_image_pairs = self.image_pair_sampler.get_pairs(num_pairs)
-        labeled_sampled_image_pairs = self.label_image_pairs(
-            self.sampled_image_pairs, margin=margin, mode=mode
-        )
 
-        self.ranked_image_pairs.extend(labeled_sampled_image_pairs)
-
-    def label_image_pairs(self, image_pairs, margin, mode="relative"):
-        """Label image pairs as oracle.
-
-        Args:
-            image_pairs (_type_): _description_
-            margin (_type_): _description_
-            mode (str, optional): _description_. Defaults to "relative".
-
-        Raises:
-            NotImplementedError: _description_
-
-        Returns:
-            _type_: _description_
-        """
-        labeled_ranked_image_pairs = []
-        for i in range(len(image_pairs)):
-            idx1 = image_pairs[i][0]
-            idx2 = image_pairs[i][1]
-            if mode == "absolute":
-                if (
-                    self.table[self.col_label].iloc[idx1]
-                    - self.table[self.col_label].iloc[idx2]
-                ) > margin:
-                    # first idx has higher discharge
-                    label = 1
-                elif (
-                    self.table[self.col_label].iloc[idx1]
-                    - self.table[self.col_label].iloc[idx2]
-                ) < -margin:
-                    # first idx has lower discharge
-                    label = -1
-                else:
-                    # both indices have similar discharge
-                    label = 0
-            elif mode == "relative":
-                left_disch = self.table[self.col_label].iloc[idx1]
-                right_dishc = self.table[self.col_label].iloc[idx2]
-                min_disch = min(left_disch, right_dishc)
-                if (left_disch - right_dishc) / min_disch > margin:
-                    # first idx has higher discharge
-                    label = 1
-                elif (left_disch - right_dishc) / min_disch < -margin:
-                    # first idx has lower discharge
-                    label = -1
-                else:
-                    # both indices have similar discharge
-                    label = 0
-            else:
-                raise NotImplementedError(
-                    "The only valid values for mode are 'relative' and 'absolute'."
-                )
-            labeled_ranked_image_pairs.extend(
-                [(idx1, idx2, label), (idx2, idx1, -1 * label)]
+        self.image_pair_annotator = kwargs.get("pair_annotator")
+        labeled_sampled_image_pairs = []
+        for pair in tqdm(self.sampled_image_pairs):
+            pair0_data = self.table.iloc[pair[0]]
+            pair1_data = self.table.iloc[pair[1]]
+            label = self.image_pair_annotator.annotate_pair(
+                (pair0_data, pair1_data), self.col_label
             )
-        return labeled_ranked_image_pairs
+            labeled_sampled_image_pairs.extend(
+                [(pair[0], pair[1], label), (pair[1], pair[0], -1 * label)]
+            )
+        self.ranked_image_pairs.extend(labeled_sampled_image_pairs)
+        # self.ranked_image_pairs.extend(
+        #     [
+        #         self.image_pair_annotator.annotate_pair(
+        #             (self.table.iloc[pair[0]], self.table.iloc[pair[1]]), self.col_label
+        #         )
+        #         for pair in tqdm(self.sampled_image_pairs)
+        #     ]
+        # )
+        # labeled_sampled_image_pairs = self.label_image_pairs(
+        #     self.sampled_image_pairs, margin=margin, mode=mode
+        # )
+
+        # self.ranked_image_pairs.extend(labeled_sampled_image_pairs)
+
+    # def label_image_pairs(self, image_pairs, margin, mode="relative"):
+    #     """Label image pairs as oracle.
+
+    #     Args:
+    #         image_pairs (_type_): _description_
+    #         margin (_type_): _description_
+    #         mode (str, optional): _description_. Defaults to "relative".
+
+    #     Raises:
+    #         NotImplementedError: _description_
+
+    #     Returns:
+    #         _type_: _description_
+    #     """
+    #     labeled_ranked_image_pairs = []
+    #     for i in range(len(image_pairs)):
+    #         idx1 = image_pairs[i][0]
+    #         idx2 = image_pairs[i][1]
+    #         if mode == "absolute":
+    #             if (
+    #                 self.table[self.col_label].iloc[idx1]
+    #                 - self.table[self.col_label].iloc[idx2]
+    #             ) > margin:
+    #                 # first idx has higher discharge
+    #                 label = 1
+    #             elif (
+    #                 self.table[self.col_label].iloc[idx1]
+    #                 - self.table[self.col_label].iloc[idx2]
+    #             ) < -margin:
+    #                 # first idx has lower discharge
+    #                 label = -1
+    #             else:
+    #                 # both indices have similar discharge
+    #                 label = 0
+    #         elif mode == "relative":
+    #             left_disch = self.table[self.col_label].iloc[idx1]
+    #             right_dishc = self.table[self.col_label].iloc[idx2]
+    #             min_disch = min(left_disch, right_dishc)
+    #             if (left_disch - right_dishc) / min_disch > margin:
+    #                 # first idx has higher discharge
+    #                 label = 1
+    #             elif (left_disch - right_dishc) / min_disch < -margin:
+    #                 # first idx has lower discharge
+    #                 label = -1
+    #             else:
+    #                 # both indices have similar discharge
+    #                 label = 0
+    #         else:
+    #             raise NotImplementedError(
+    #                 "The only valid values for mode are 'relative' and 'absolute'."
+    #             )
+    #         labeled_ranked_image_pairs.extend(
+    #             [(idx1, idx2, label), (idx2, idx1, -1 * label)]
+    #         )
+    #     return labeled_ranked_image_pairs
+
+
+class ImagePairAnnotator(ABC):
+    """Annotation methods for pairs of streamflow images."""
+
+    @abstractmethod
+    def __init__(self):
+        pass
+
+    @abstractmethod
+    def annotate_pair(self, pair):
+        pass
+
+
+class OracleAnnotator(ImagePairAnnotator):
+    """Annotate image pairs using a simulated oracle."""
+
+    def __init__(self, margin=0, margin_mode="relative"):
+        # super().__init__(table, pairs, self.label_image_pairs)
+        self.margin = margin
+        self.margin_mode = margin_mode
+        super().__init__()
+
+    def annotate_pair(self, pair, col_label):
+        left_disch = pair[0][col_label]
+        right_dishc = pair[1][col_label]
+        if self.margin_mode == "absolute":
+            if (left_disch - right_dishc) > self.margin:
+                # first idx has higher discharge
+                label = 1
+            elif (left_disch - right_dishc) < -self.margin:
+                # first idx has lower discharge
+                label = -1
+            else:
+                # both indices have similar discharge
+                label = 0
+        elif self.margin_mode == "relative":
+            min_disch = min(left_disch, right_dishc)
+            if (left_disch - right_dishc) / min_disch > self.margin:
+                # first idx has higher discharge
+                label = 1
+            elif (left_disch - right_dishc) / min_disch < -self.margin:
+                # first idx has lower discharge
+                label = -1
+            else:
+                # both indices have similar discharge
+                label = 0
+        else:
+            raise NotImplementedError(
+                "The only valid values for mode are 'relative' and 'absolute'."
+            )
+        return label
+
+
+class ProbabilisticAnnotator(ImagePairAnnotator):
+    """Annotate image pairs using a simulated annotator."""
+
+    # y = 0.524 + (1.300 * x) + (-1.480 * x^2) + (0.771 * x^3) + (-0.148 * x^4)
+    def __init__(self):
+        self.same_prob_fn = lambda x: (
+            max(
+                0,
+                min(
+                    1,
+                    7.13079819e-01
+                    + (-9.61194045e-01 * x)
+                    + (3.44227199e-04 * x**2)
+                    + (4.45046915e-01 * x**3)
+                    + (-1.49262248e-01 * x**4),
+                ),
+            )
+        )
+        self.accuracy_prob_fn = lambda x: (
+            max(
+                0,
+                min(
+                    1,
+                    0.524
+                    + (1.300 * x)
+                    + (-1.480 * x**2)
+                    + (0.771 * x**3)
+                    + (-0.148 * x**4),
+                ),
+            )
+        )
+        super().__init__()
+
+    def annotate_pair(self, pair, col_label):
+        left_disch, right_dishc = pair[0][col_label], pair[1][col_label]
+        mean_disch = (left_disch + right_dishc) / 2
+        rel_delta_disch = np.abs(left_disch - right_dishc) / mean_disch
+        same_prob = self.same_prob_fn(rel_delta_disch)
+        if np.random.uniform() < same_prob:
+            label = 0
+        else:
+            correct_label = int(np.sign(left_disch - right_dishc))
+            if np.random.uniform() < self.accuracy_prob_fn(rel_delta_disch):
+                label = correct_label
+            else:
+                label = -1 * correct_label
+        return label
+
+    # def label_image_pairs(self, table, image_pairs):
+    #     labeled_ranked_image_pairs = []
+    #     for i in range(len(image_pairs)):
+    #         idx1 = image_pairs[i][0]
+    #         idx2 = image_pairs[i][1]
+    #         if self.mode == "absolute":
+    #             if (
+    #                 table[self.col_label].iloc[idx1] - table[self.col_label].iloc[idx2]
+    #             ) > self.margin:
+    #                 # first idx has higher discharge
+    #                 label = 1
+    #             elif (
+    #                 table[self.col_label].iloc[idx1] - table[self.col_label].iloc[idx2]
+    #             ) < -self.margin:
+    #                 # first idx has lower discharge
+    #                 label = -1
+    #             else:
+    #                 # both indices have similar discharge
+    #                 label = 0
+    #         elif self.mode == "relative":
+    #             left_disch = table[self.col_label].iloc[idx1]
+    #             right_dishc = table[self.col_label].iloc[idx2]
+    #             min_disch = min(left_disch, right_dishc)
+    #             if (left_disch - right_dishc) / min_disch > self.margin:
+    #                 # first idx has higher discharge
+    #                 label = 1
+    #             elif (left_disch - right_dishc) / min_disch < -self.margin:
+    #                 # first idx has lower discharge
+    #                 label = -1
+    #             else:
+    #                 # both indices have similar discharge
+    #                 label = 0
+    #         else:
+    #             raise NotImplementedError(
+    #                 "The only valid values for mode are 'relative' and 'absolute'."
+    #             )
+    #         labeled_ranked_image_pairs.extend(
+    #             [(idx1, idx2, label), (idx2, idx1, -1 * label)]
+    #         )
+    #     return labeled_ranked_image_pairs
 
 
 class ImagePairSampler:
@@ -382,7 +549,7 @@ def temporally_distributed_pairs(table, num_pairs):
 
 def discharge_distributed_pairs(table, num_pairs):
     discharge_diffs = np.abs(
-        np.subtract.outer(table.DISCHARGE.tolist(), table.DISCHARGE.tolist())
+        np.subtract.outer(table.flow_cfs.tolist(), table.flow_cfs.tolist())
     )
     for i in range(discharge_diffs.shape[0]):
         for j in range(0, i + 1):
