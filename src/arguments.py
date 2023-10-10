@@ -79,19 +79,6 @@ def add_ranking_data_args(parser):
         "RankNet Training", "Arguments to configure RankNet training data"
     )
     group.add_argument(
-        "--margin-mode",
-        type=str,
-        default="relative",
-        choices=["relative", "absolute"],
-        help="type of comparison made by simulated oracle makes of flows in a pair of images",
-    )
-    group.add_argument(
-        "--margin",
-        type=float,
-        default=0.1,
-        help="minimum difference in a pair of streamflow images needed to rank one higher than the other",
-    )
-    group.add_argument(
         "--num-train-pairs",
         type=int,
         default=5000,
@@ -102,6 +89,29 @@ def add_ranking_data_args(parser):
         type=int,
         default=1000,
         help="number of labeled image pairs on which to evaluate model",
+    )
+    group.add_argument(
+        "--pair-sampling-method",
+        type=str,
+        choices=["random_pairs", "discharge_distributed_pairs", "file"],
+        help="method for sampling pairs of images for training",
+    )
+    group.add_argument(
+        "--pair-annotation-method",
+        type=str,
+        choices=["oracle", "simulated_annotator", "file"],
+        help="method for annotation",
+    )
+    group.add_argument(
+        "--margin-mode",
+        type=str,
+        choices=["relative", "absolute"],
+        help="type of comparison made by simulated oracle makes of flows in a pair of images",
+    )
+    group.add_argument(
+        "--margin",
+        type=float,
+        help="minimum difference in a pair of streamflow images needed to rank one higher than the other",
     )
     group.add_argument(
         "--annotations",
