@@ -40,9 +40,17 @@ from src.datasets import (
     RandomStratifiedWindowFlow,
     FlowPhotoRankingDataset,
     random_pairs,
+    discharge_distributed_pairs,
+    OracleAnnotator,
+    ProbabilisticAnnotator,
 )
 from src.modules import ResNetRankNet
 from src.losses import RankNetLoss
+
+pair_sampling_fn_map = {
+    "random_pairs": random_pairs,
+    "discharge_distributed_pairs": discharge_distributed_pairs,
+}
 
 
 def get_args():
@@ -221,24 +229,29 @@ def train_ranking_model(args):
         )
 
     else:
+        if args.pair_annotation_method == "oracle":
+            pair_annotator = OracleAnnotator(**args.pair_annotation_method_kwargs)
+        elif args.pair_annotation_method == "simulated_annotator":
+            pair_annotator = ProbabilisticAnnotator(
+                **args.pair_annotation_method_kwargs
+            )
+        elif args.pair_annotation_method == "file":
+            raise NotImplementedError
         # create ranked image pairs from ground truth
         train_ds.rank_image_pairs(
-            random_pairs,
             args.num_train_pairs,
-            args.margin,
-            args.margin_mode,
+            pair_sampling_fn=pair_sampling_fn_map[args.pair_sampling_method],
+            pair_annotator=pair_annotator,
         )
         val_ds.rank_image_pairs(
-            random_pairs,
             args.num_eval_pairs,
-            args.margin,
-            args.margin_mode,
+            pair_sampling_fn=pair_sampling_fn_map[args.pair_sampling_method],
+            pair_annotator=pair_annotator,
         )
         test_ds.rank_image_pairs(
-            random_pairs,
             args.num_eval_pairs,
-            args.margin,
-            args.margin_mode,
+            pair_sampling_fn=pair_sampling_fn_map[args.pair_sampling_method],
+            pair_annotator=pair_annotator,
         )
         # save the train/val/test ranked image pairs
         train_pairs = [
@@ -441,6 +454,18 @@ def train_ranking_model(args):
 
 if __name__ == "__main__":
     args = get_args()
+    if args.pair_annotation_method == "oracle":
+        args.pair_annotation_method_kwargs = {
+            "margin": args.margin,
+            "margin_mode": args.margin_mode,
+        }
+    elif args.pair_annotation_method == "simulated_annotator":
+        args.pair_annotation_method_kwargs = {}
+    elif args.pair_annotation_method == "file":
+        args.pair_annotation_method_kwargs = {
+            "annotations": args.annotations,
+        }
+    print(args)
 
     # set up output folder for current run
     exp_dirname = "_".join([os.path.splitext(os.path.basename(__file__))[0], args.site])
