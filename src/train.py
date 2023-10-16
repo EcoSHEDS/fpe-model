@@ -18,6 +18,7 @@ from torchvision.transforms import (
     ColorJitter,
     Normalize,
     Compose,
+    Grayscale,
 )
 from utils import (
     set_seeds,
@@ -40,6 +41,7 @@ def list_all_files(directory):
 def create_image_transforms(
     resize_shape,
     input_shape,
+    decolorize=False,
     augmentation=True,
     normalization=True,
     means=None,
@@ -54,6 +56,11 @@ def create_image_transforms(
         ],
     }
 
+    # decolorize
+    if decolorize:
+        image_transforms["train"].append(Grayscale(num_output_channels=3))
+        image_transforms["eval"].append(Grayscale(num_output_channels=3))
+
     # augmentation
     image_transforms["train"].extend(
         [
@@ -67,8 +74,8 @@ def create_image_transforms(
     )
     image_transforms["eval"].append(CenterCrop(input_shape))
 
-    # normalization
-    if normalization:
+    # normalization (except when decolorizing)
+    if normalization and not decolorize:
         image_transforms["train"].append(Normalize(means, stds))
         image_transforms["eval"].append(Normalize(means, stds))
 
@@ -121,13 +128,14 @@ def train(args):
     pair = train_ds.get_pair(0)
     image = train_ds.get_image(pair["filename_1"])
     aspect = image.shape[2] / image.shape[1]
-    resize_shape = [480, np.int32(480 * aspect)]
-    input_shape = [384, np.int32(384 * aspect)]
+    resize_shape = [args.input_size, np.int32(args.input_size * aspect)]
+    input_shape = [np.int32(args.input_size * 0.8), np.int32(args.input_size * 0.8 * aspect)]
     image_transforms = create_image_transforms(
         resize_shape,
         input_shape,
         means=img_sample_mean,
         stds=img_sample_std,
+        decolorize=args.decolorize,
         augmentation=args.augment,
         normalization=args.normalize,
     )
@@ -344,6 +352,14 @@ if __name__ == "__main__":
     parser.add_argument(
         "--num-image-stats", type=int, default=1000,
         help="number of images to compute mean/stdev",
+    )
+    parser.add_argument(
+        "--input-size", type=int, default=480,
+        help="image input size to model",
+    )
+    parser.add_argument(
+        "--decolorize", type=bool, default=False,
+        help="remove image color channels",
     )
     parser.add_argument(
         "--normalize", type=bool, default=True,
