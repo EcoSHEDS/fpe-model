@@ -25,8 +25,8 @@ knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE, fig.width 
 
 # params <- list(
 #   root_dir = "D:/fpe/sites",
-#   site = "VLYB",
-#   model_id = "20230922"
+#   site = "WHATELY",
+#   model_id = "20231005"
 # )
 
 site_dir <- file.path(params$root_dir, params$site)
@@ -36,7 +36,7 @@ split_args_file <- file.path(model_dir, "input", "args.json")
 metrics_file <- file.path(model_dir, "output", "metrics.csv")
 pred_file <- file.path(model_dir, "transform", "predictions.csv")
 station_file <- file.path(site_dir, "data", "station.json")
-flow_images_file <- file.path(site_dir, "data", "flow-images-train.csv")
+images_file <- file.path(site_dir, "data", "images.csv")
 train_args_file <- file.path(model_dir, "output", "args.json")
 train_file <- file.path(model_dir, "input", "pairs-train.csv")
 val_file <- file.path(model_dir, "input", "pairs-val.csv")
@@ -55,7 +55,7 @@ train_args <- jsonlite::read_json(train_args_file)
 
 metrics <- read_csv(metrics_file, show_col_types = FALSE)
 
-flow_images <- read_csv(flow_images_file, show_col_types = FALSE)
+images <- read_csv(images_file, show_col_types = FALSE)
 
 pairs_train <- read_csv(train_file, show_col_types = FALSE)
 pairs_val <- read_csv(val_file, show_col_types = FALSE)
@@ -81,7 +81,7 @@ pred <- read_csv(pred_file, show_col_types = FALSE) %>%
     timestamp = with_tz(timestamp, tzone = "US/Eastern"),
     date = as_date(timestamp),
     hour = hour(timestamp),
-    rank_obs = rank(flow_cfs) / n(),
+    rank_obs = rank(flow_cfs, na.last = "keep") / n(),
     rank_pred = rank(score) / n(),
     rank_resid = (rank_obs - rank_pred)
   ) %>% 
@@ -107,7 +107,7 @@ pred_day <- pred %>%
     .groups = "drop"
   ) %>%
   mutate(
-    rank_obs = rank(flow_cfs) / n(),
+    rank_obs = rank(flow_cfs, na.last = "keep") / n(),
     rank_pred = rank(score) / n()
   ) %>% 
   left_join(
@@ -121,6 +121,7 @@ pred_day <- pred %>%
   mutate(split = factor(coalesce(split, "N/A"), levels = levels(pred$split)))
 
 if (any(!is.na(pred$flow_cfs))) {
+  safe_cor <- possibly(cor, otherwise = NA_real_)
   tau <- pred %>% 
     bind_rows(
       pred %>% 
@@ -134,7 +135,7 @@ if (any(!is.na(pred$flow_cfs))) {
     group_by(split) %>% 
     summarise(
       n = sum(!is.na(score)),
-      tau = cor(flow_cfs, score, method = "kendall", use = "complete.obs")
+      tau = safe_cor(flow_cfs, score, method = "kendall", use = "complete.obs")
     ) %>%
     select(split, tau) %>% 
     deframe()
@@ -152,7 +153,7 @@ if (any(!is.na(pred$flow_cfs))) {
     group_by(split) %>% 
     summarise(
       n = sum(!is.na(score)),
-      tau = cor(flow_cfs, score, method = "kendall", use = "complete.obs")
+      tau = safe_cor(flow_cfs, score, method = "kendall", use = "complete.obs")
     ) %>%
     select(split, tau) %>% 
     deframe()
