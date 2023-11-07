@@ -4,7 +4,6 @@ generate_report <- function (site, model_id, root_dir = "D:/fpe/sites") {
   quarto::quarto_render(
     input = "qmd/rank-predictions.qmd",
     output_format = "html",
-    # output_file = output_file,
     execute_params = list(
       root_dir = root_dir,
       site = site,
@@ -21,6 +20,15 @@ generate_report <- function (site, model_id, root_dir = "D:/fpe/sites") {
 }
 
 generate_report("WESTB0", "20230922")
+
+# all runs in csv file
+runs <- read_csv("D:/fpe/sites/model-runs.csv")
+
+for (i in 1:nrow(runs)) {
+  print(glue("{runs$site[[i]]}/{runs$model[[i]]} ({i}/{nrow(runs)})"))
+  generate_report(runs$site[[i]], runs$model[[i]])
+}
+
 
 # WESTB0: 20230920, 20230921, 20230922 annotation quality --------------------
 # 20230920: all annotations

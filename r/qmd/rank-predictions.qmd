@@ -25,8 +25,8 @@ knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE, fig.width 
 
 # params <- list(
 #   root_dir = "D:/fpe/sites",
-#   site = "WHATELY",
-#   model_id = "20231005"
+#   site = "MITCHB",
+#   model_id = "20230928"
 # )
 
 site_dir <- file.path(params$root_dir, params$site)
@@ -41,6 +41,13 @@ train_args_file <- file.path(model_dir, "output", "args.json")
 train_file <- file.path(model_dir, "input", "pairs-train.csv")
 val_file <- file.path(model_dir, "input", "pairs-val.csv")
 test_file <- file.path(model_dir, "input", "pairs-test.csv")
+
+split_labels <- c(
+  "train" = "Train",
+  "val" = "Val",
+  "test" = "Test",
+  "na" = "Not Annotated"
+)
 ```
 
 ```{r load}
@@ -89,8 +96,8 @@ pred <- read_csv(pred_file, show_col_types = FALSE) %>%
     splits, by = "timestamp"
   ) %>% 
   mutate(
-    split = coalesce(split, "N/A"),
-    split = factor(split, levels = c("train", "val", "test", "N/A"))
+    split = coalesce(split, "na"),
+    split = factor(split, levels = c("train", "val", "test", "na"))
   )
 pred <- pred %>% 
   complete(date = seq.Date(min(pred$date), max(pred$date), by = "1 day")) %>%
@@ -113,12 +120,12 @@ pred_day <- pred %>%
   left_join(
     pred %>%
       select(date, split) %>%
-      filter(!is.na(split), split != "N/A") %>%
+      filter(!is.na(split), split != "na") %>%
       distinct(),
     by = "date"
   ) %>% 
   complete(date = seq.Date(min(pred$date), max(pred$date), by = "1 day")) %>% 
-  mutate(split = factor(coalesce(split, "N/A"), levels = levels(pred$split)))
+  mutate(split = factor(coalesce(split, "na"), levels = levels(pred$split)))
 
 if (any(!is.na(pred$flow_cfs))) {
   safe_cor <- possibly(cor, otherwise = NA_real_)
@@ -167,12 +174,14 @@ if (any(!is.na(pred$flow_cfs))) {
     train = NA_real_,
     val = NA_real_,
     test = NA_real_,
+    na = NA_real_,
     total = NA_real_
   )
   tau_day <- list(
     train = NA_real_,
     val = NA_real_,
     test = NA_real_,
+    na = NA_real_,
     total = NA_real_
   )
 }
@@ -204,10 +213,11 @@ Training Params:
   Learn Rate:    `r train_args$lr`
 
 Performance (Kendall Tau):      
-  Train:   `r sprintf("%.2f", tau["train"])`
-  Val:     `r sprintf("%.2f", tau["val"])`
-  Test:    `r sprintf("%.2f", tau["test"])`
-  Overall: `r sprintf("%.2f", tau["total"])`
+  Train:         `r sprintf("%.2f", tau["train"])`
+  Val:           `r sprintf("%.2f", tau["val"])`
+  Test:          `r sprintf("%.2f", tau["test"])`
+  Not Annotated: `r sprintf("%.2f", tau["na"])`
+  Overall:       `r sprintf("%.2f", tau["total"])`
 ```
 
 ## Training Loss
@@ -229,7 +239,7 @@ metrics %>%
   ) +
   scale_x_continuous(breaks = scales::pretty_breaks(n = 10)) +
   scale_y_continuous(limits = c(0, NA), expand = expansion(c(0, 0.05))) +
-  scale_color_brewer("Split", palette = "Set1") +
+  scale_color_brewer("Split", palette = "Set1", labels = split_labels) +
   scale_size_manual(values = 5) +
   guides(
     color = guide_legend(order = 1),
@@ -246,39 +256,98 @@ metrics %>%
 
 ## Timeseries
 
-```{r ts_value, fig.height=8}
-pred %>%
-  transmute(timestamp, `log(flow_cfs)` = log10(flow_cfs), score) %>%
-  pivot_longer(-timestamp) %>%
-  ggplot(aes(timestamp, value)) +
+```{r ts_value, fig.height=10}
+p_q <- pred %>%
+  # transmute(timestamp, `log(flow_cfs)` = log10(flow_cfs), score) %>%
+  # pivot_longer(-timestamp) %>%
+  ggplot(aes(timestamp, log10(flow_cfs))) +
   geom_line() +
-  geom_point(
-    data = pairs %>% 
-      mutate(
-        flow = log10(label),
-        name = "log(flow_cfs)",
-        split = factor(split, levels = levels(pred$split))
-      ),
-    aes(y = flow, color = split),
-    size = 0.5
-  ) +
+  # geom_point(
+  #   data = pairs %>% 
+  #     mutate(
+  #       flow = log10(label),
+  #       name = "log(flow_cfs)",
+  #       split = factor(split, levels = levels(pred$split))
+  #     ),
+  #   aes(y = flow, color = split),
+  #   size = 0.5
+  # ) +
   scale_x_datetime(date_labels = "%b %Y", date_breaks = "2 months", expand = expansion()) +
-  facet_wrap(vars(name), scales = "free_y", ncol = 1, strip.position = "left", labeller = labeller(
-    name = c("log(flow_cfs)" = "Obs log10(Flow [cfs])", "score" = "Pred Score")
-  )) +
-  labs(x = "Date", y = NULL) +
-  scale_color_brewer("Split", palette = "Set1") +
+  # facet_wrap(vars(name), scales = "free_y", ncol = 1, strip.position = "left", labeller = labeller(
+  #   name = c("log(flow_cfs)" = "Obs log10(Flow [cfs])", "score" = "Pred Score")
+  # )) +
+  labs(x = "Date", y = "Obs log10(Flow [cfs])") +
+  # scale_color_brewer("Split", palette = "Set1") +
   labs(
-    x = "Date",
-    title = "Timeseries of Observed Flow and Predicted Scores"
+    # x = "Date",
+    # title = "Timeseries of Observed Flow and Predicted Scores"
   ) +
-  guides(color = guide_legend(override.aes = list(size = 1))) +
+  # guides(color = guide_legend(override.aes = list(size = 1))) +
   theme_bw() +
   theme(
-    strip.placement = "outside",
-    strip.background = element_blank(),
-    strip.text = element_text(size = 12)
+    # strip.placement = "outside",
+    # strip.background = element_blank(),
+    # strip.text = element_text(size = 12)
   )
+
+p_s <- pred %>%
+  # transmute(timestamp, `log(flow_cfs)` = log10(flow_cfs), score) %>%
+  # pivot_longer(-timestamp) %>%
+  ggplot(aes(timestamp, score)) +
+  geom_line() +
+  # geom_point(
+  #   data = pairs %>% 
+  #     mutate(
+  #       flow = log10(label),
+  #       name = "log(flow_cfs)",
+  #       split = factor(split, levels = levels(pred$split))
+  #     ),
+  #   aes(y = flow, color = split),
+  #   size = 0.5
+  # ) +
+  scale_x_datetime(date_labels = "%b %Y", date_breaks = "2 months", expand = expansion()) +
+  # facet_wrap(vars(name), scales = "free_y", ncol = 1, strip.position = "left", labeller = labeller(
+  #   name = c("log(flow_cfs)" = "Obs log10(Flow [cfs])", "score" = "Pred Score")
+  # )) +
+  labs(x = "Date", y = "Pred Score") +
+  # scale_color_brewer("Split", palette = "Set1") +
+  labs(
+    # x = "Date",
+    # title = "Timeseries of Observed Flow and Predicted Scores"
+  ) +
+  # guides(color = guide_legend(override.aes = list(size = 1))) +
+  theme_bw() +
+  theme(
+    # strip.placement = "outside",
+    # strip.background = element_blank(),
+    # strip.text = element_text(size = 12)
+  )
+p_splits <- pred %>% 
+  filter(!is.na(split), split != "na") %>% 
+  ggplot(aes(timestamp)) +
+  geom_rug(aes(color = split), length = unit(100, "mm")) +
+  scale_x_datetime(
+    date_labels = "%b %Y", date_breaks = "2 months", expand = expansion(),
+    limits = range(pred$timestamp)
+  ) +
+  scale_color_brewer("Split", palette = "Set1", drop = FALSE, labels = split_labels) +
+  labs(x = NULL, y = "Annotated\nImages") +
+  theme_bw()
+p_na <- pred %>% 
+  filter(!is.na(split), split == "na") %>% 
+  ggplot(aes(timestamp)) +
+  geom_rug(aes(color = split), length = unit(100, "mm")) +
+  scale_x_datetime(
+    date_labels = "%b %Y", date_breaks = "2 months", expand = expansion(),
+    limits = range(pred$timestamp)
+  ) +
+  scale_color_brewer("Split", palette = "Set1", drop = FALSE, labels = split_labels) +
+  labs(x = NULL, y = "Unannotated\nImages") +
+  theme_bw()
+
+wrap_plots(p_q, p_splits, p_na, p_s, ncol = 1, heights = c(0.3, 0.05, 0.05, 0.3)) +
+  plot_layout(guides = "collect") +
+  plot_annotation(title = "Timeseries of Observed Flow, Photo Timestamps, and Predicted Scores")
 ```
 
 ```{r ts_rank, fig.height=4}
@@ -287,7 +356,7 @@ pred %>%
   ggplot(aes(timestamp)) +
   geom_line(aes(y = rank_pred, linetype = "Predicted"), color = "black") +
   geom_point(aes(y = rank_obs, color = split), size = 1, alpha = 0.5) +
-  scale_color_brewer("Split", palette = "Set1") +
+  scale_color_brewer("Split", palette = "Set1", labels = split_labels) +
   scale_x_datetime(date_labels = "%b %Y", date_breaks = "2 months", expand = expansion()) +
   scale_y_continuous(breaks = scales::pretty_breaks(n = 8), labels = scales::percent_format(accuracy = 1), expand = expansion()) +
   guides(
@@ -310,7 +379,7 @@ p1 <- pred %>%
   ggplot(aes(flow_cfs, score)) +
   geom_point(aes(color = split), size = 0.5, alpha = 0.5) +
   geom_smooth(method = "lm", se = FALSE, formula = y ~ x, color = "black") +
-  scale_color_brewer("Split", palette = "Set1") +
+  scale_color_brewer("Split", palette = "Set1", labels = split_labels) +
   scale_x_log10() +
   labs(
     x = "Obs Flow (cfs)",
@@ -318,7 +387,7 @@ p1 <- pred %>%
     title = "Observed Flow vs Predicted Score"
   ) +
   guides(color = guide_legend(override.aes = list(size = 1))) +
-  facet_wrap(vars(split), ncol = 1) +
+  facet_wrap(vars(split), ncol = 1, labeller = labeller(split = split_labels)) +
   theme_bw() +
   theme(aspect.ratio = 1)
 p2 <- pred %>%
@@ -326,7 +395,7 @@ p2 <- pred %>%
   ggplot(aes(rank_obs, rank_pred)) +
   geom_point(aes(color = split), size = 0.5, alpha = 0.5) +
   geom_abline(color = "black", linewidth = 1) +
-  scale_color_brewer("Split", palette = "Set1") +
+  scale_color_brewer("Split", palette = "Set1", labels = split_labels) +
   scale_x_continuous(breaks = scales::pretty_breaks(), labels = scales::percent_format(accuracy = 1), expand = expansion(), limits = c(0, NA)) +
   scale_y_continuous(breaks = scales::pretty_breaks(), labels = scales::percent_format(accuracy = 1), expand = expansion(), limits = c(0, NA)) +
   labs(
@@ -335,7 +404,7 @@ p2 <- pred %>%
     title = "Observed vs. Predicted Ranks"
   ) +
   guides(color = guide_legend(override.aes = list(size = 1))) +
-  facet_wrap(vars(split), ncol = 1) +
+  facet_wrap(vars(split), ncol = 1, labeller = labeller(split = split_labels)) +
   theme_bw() +
   theme(aspect.ratio = 1)
 if (any(!is.na(pred$flow_cfs))) {
@@ -354,11 +423,11 @@ pred %>%
   ggplot(aes(timestamp, rank_resid)) +
   geom_hline(yintercept = 0) +
   geom_point(aes(color = split), size = 0.5, alpha = 0.5) +
-  scale_color_brewer("Split", palette = "Set1") +
+  scale_color_brewer("Split", palette = "Set1", labels = split_labels) +
   scale_x_datetime(date_labels = "%b %Y", date_breaks = "2 months", expand = expansion()) +
   scale_y_continuous(breaks = scales::pretty_breaks(n = 8), labels = scales::percent_format(accuracy = 1), expand = expansion()) +
   guides(color = guide_legend(override.aes = list(size = 1))) +
-  facet_wrap(vars(split)) +
+  facet_wrap(vars(split), labeller = labeller(split = split_labels)) +
   labs(
     x = "Date",
     y = "Percentile Rank Residual (Obs-Pred)",
@@ -374,11 +443,11 @@ p1 <- pred %>%
   geom_hline(yintercept = 0) +
   geom_point(size = 0.2) +
   geom_point(aes(color = split), size = 0.5, alpha = 0.5) +
-  scale_color_brewer("Split", palette = "Set1") +
+  scale_color_brewer("Split", palette = "Set1", labels = split_labels) +
   scale_y_continuous(breaks = scales::pretty_breaks(n = 8), labels = scales::percent_format(accuracy = 1), expand = expansion()) +
   scale_x_continuous(breaks = scales::pretty_breaks(n = 4), labels = scales::percent_format(accuracy = 1), expand = expansion(), limits = c(0, 1)) +
   guides(color = guide_legend(override.aes = list(size = 1))) +
-  facet_wrap(vars(split), ncol = 1) +
+  facet_wrap(vars(split), ncol = 1, labeller = labeller(split = split_labels)) +
   labs(
     x = "Predicted Percentile Rank",
     y = "Percentile Rank Residual (Obs-Pred)",
@@ -392,11 +461,11 @@ p2 <- pred %>%
   ggplot(aes(hour(timestamp), rank_resid)) +
   geom_hline(yintercept = 0) +
   geom_jitter(aes(color = split), height = 0, size = 0.5, alpha = 0.5) +
-  scale_color_brewer("Split", palette = "Set1") +
+  scale_color_brewer("Split", palette = "Set1", labels = split_labels) +
   scale_y_continuous(breaks = scales::pretty_breaks(n = 6), labels = scales::percent_format(accuracy = 1), expand = expansion()) +
   scale_x_continuous(breaks = scales::pretty_breaks(n = 10)) +
   guides(color = guide_legend(override.aes = list(size = 1))) +
-  facet_wrap(vars(split), ncol = 1) +
+  facet_wrap(vars(split), ncol = 1, labeller = labeller(split = split_labels)) +
   labs(
     x = "Hour of Day",
     y = "Percentile Rank Residual (Obs-Pred)",
@@ -410,11 +479,11 @@ p3 <- pred %>%
   ggplot(aes(ymd(20001231) + days(yday(timestamp)), rank_resid)) +
   geom_hline(yintercept = 0) +
   geom_jitter(aes(color = split), height = 0, size = 0.5, alpha = 0.5) +
-  scale_color_brewer("Split", palette = "Set1") +
+  scale_color_brewer("Split", palette = "Set1", labels = split_labels) +
   scale_y_continuous(breaks = scales::pretty_breaks(n = 8), labels = scales::percent_format(accuracy = 1), expand = expansion()) +
   scale_x_date(date_breaks = "2 months", date_labels = "%b", limits = ymd(c(20010101, 20011231)), expand = expansion()) +
   guides(color = guide_legend(override.aes = list(size = 1))) +
-  facet_wrap(vars(split), ncol = 1) +
+  facet_wrap(vars(split), ncol = 1, labeller = labeller(split = split_labels)) +
   labs(
     x = "Day of Year",
     y = "Percentile Rank Residual (Obs-Pred)",
@@ -437,10 +506,11 @@ Note: excludes nighttime images and observed flows
 
 ```text
 Performance (Kendall Tau):      
-  Train:   `r sprintf("%.2f", tau_day["train"])`
-  Val:     `r sprintf("%.2f", tau_day["val"])`
-  Test:    `r sprintf("%.2f", tau_day["test"])`
-  Overall: `r sprintf("%.2f", tau_day["total"])`
+  Train:         `r sprintf("%.2f", tau_day["train"])`
+  Val:           `r sprintf("%.2f", tau_day["val"])`
+  Test:          `r sprintf("%.2f", tau_day["test"])`
+  Not Annotated: `r sprintf("%.2f", tau_day["na"])`
+  Overall:       `r sprintf("%.2f", tau_day["total"])`
 ```
 
 ```{r day_ts, fig.height=4}
@@ -448,7 +518,7 @@ pred_day %>%
   ggplot(aes(date)) +
   geom_step(aes(y = rank_pred, linetype = "Predicted"), color = "black") +
   geom_point(aes(y = rank_obs, color = split), size = 1) +
-  scale_color_brewer("Split", palette = "Set1") +
+  scale_color_brewer("Split", palette = "Set1", labels = split_labels) +
   scale_x_date(date_labels = "%b %Y", date_breaks = "2 months", expand = expansion()) +
   scale_y_continuous(breaks = scales::pretty_breaks(n = 8), labels = scales::percent_format(accuracy = 1), expand = expansion()) +
   labs(
@@ -466,7 +536,7 @@ pred_day %>%
   ggplot(aes(rank_obs, rank_pred)) +
   geom_point(aes(color = split), size = 1, alpha = 0.5) +
   geom_abline(color = "black") +
-  scale_color_brewer("Split", palette = "Set1") +
+  scale_color_brewer("Split", palette = "Set1", labels = split_labels) +
   scale_x_continuous(breaks = scales::pretty_breaks(), expand = expansion(), limits = c(0, 1), labels = scales::percent) +
   scale_y_continuous(breaks = scales::pretty_breaks(), expand = expansion(), limits = c(0, 1), labels = scales::percent) +
   labs(
@@ -474,7 +544,7 @@ pred_day %>%
     y = "Predicted Rank",
     title = "Observed vs. Predicted Daily Ranks"
   ) +
-  facet_wrap(vars(split), nrow = 1) +
+  facet_wrap(vars(split), nrow = 1, labeller = labeller(split = split_labels)) +
   theme_bw() +
   theme(aspect.ratio = 1)
 ```
