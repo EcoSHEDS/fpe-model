@@ -9,6 +9,7 @@ __pycache__/
 .env.local
 .Rproj.user
 r/.Rhistory
+r/config.yml
 r/qmd/*.html
 r/qmd/*.md
 r/qmd/*.rmarkdown

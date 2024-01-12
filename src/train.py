@@ -129,7 +129,9 @@ def train(args):
     image = train_ds.get_image(pair["filename_1"])
     aspect = image.shape[2] / image.shape[1]
     resize_shape = [args.input_size, np.int32(args.input_size * aspect)]
+    print(f"resize_shape: {resize_shape}")
     input_shape = [np.int32(args.input_size * 0.8), np.int32(args.input_size * 0.8 * aspect)]
+    print(f"input_shape: {input_shape}")
     image_transforms = create_image_transforms(
         resize_shape,
         input_shape,
