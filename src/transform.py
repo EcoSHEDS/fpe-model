@@ -76,7 +76,6 @@ def output_fn(predictions, response_content_type):
 def transform(args):
     data_filepath = os.path.join(args.values_dir, args.data_file)
     df = load_data(data_filepath)
-    df = df.head(100)
     df["score"] = np.nan
     ds = FlowPhotoDataset(df, args.images_dir)
 
