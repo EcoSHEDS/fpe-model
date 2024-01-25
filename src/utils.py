@@ -464,6 +464,8 @@ def parse_configargparse_args(params_file):
         "max_hour": int,
         "margin": float,
         "margin_mode": str,
+        "pair_sampling_method": str,
+        "pair_annotation_method": str,
         "num_train_pairs": int,
         "num_eval_pairs": int,
         "augment": bool,
