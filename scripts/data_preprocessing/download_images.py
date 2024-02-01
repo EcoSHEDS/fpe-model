@@ -1,88 +1,120 @@
-""" Download images from urls in a csv file.
+""" Download images from URLs in a CSV file.
 
-This script downloads images from urls in a csv file and saves them to a
+This script downloads images from URLs in a CSV file and saves them to a
 specified directory. It also checks that the downloaded images are valid.
 
-The csv file should have the following columns:
-    - url: url to download image from
+The CSV file should have the following columns:
+    - URL: URL to download image from
     - filename: filename to save image as
 
 Example usage:
     python download_images.py \
-        --data-root-dir /path/to/fpe_stations/AVERYBB \
-        --data-filename AVERYBB-20230829/data/flow-images.csv \
-        --image-base-dir ''
+        --dataset-dir /path/to/fpe_stations/AVERYBB \
+        --csv-file AVERYBB-20230829/data/flow-images.csv \
+        --output-dir '' \
+        --num-workers 8 \
+        --max-attempts 3
 
 This opens /path/to/fpe_stations/AVERYBB/AVERYBB-20230829/data/flow-images.csv
 and downloads images to /path/to/fpe_stations/AVERYBB/ with the same filename
-as in the csv file. In this case, the csv file has filenames starting with
-imagesets/ so images are saved to/path/to/fpe_stations/AVERYBB/imagesets/...
+as in the CSV file. In this case, the CSV file has filenames starting with
+imagesets/ so images are saved to /path/to/fpe_stations/AVERYBB/imagesets/...
 This allows multiple snapshots of the same station to be saved without
 duplicating image files.
 
 """
 
 import argparse
-import os
-import shutil  # save img locally
+import concurrent.futures  # for multithreading
+from pathlib import Path
+from typing import Union
 
 import pandas as pd
-import requests  # request img from web
-from torchvision.io import read_image
 from tqdm import tqdm
 
-
-def download_image_from_url(url, save_path):
-    response = requests.get(url, stream=True)
-    if response.status_code == 200:
-        with open(save_path, "wb") as f:
-            shutil.copyfileobj(response.raw, f)
-    else:
-        raise Exception(f"Image couldn't be retrieved from URL: \n\t{url}")
+from src.utils import check_image, download_image_from_url
 
 
-def check_downloaded_image(image_path, url):
-    try:
-        read_image(image_path)
-    except Exception as e:
-        print(f"Cannot read image {image_path}")
-        print(e)
-        print("Retrying download...")
-        download_image_from_url(url, image_path)
+def download_and_check_image(
+    url: str, path: Union[str, Path], attempts: int = 3
+) -> bool:
+    # Check if file exists and is valid
+    if path.exists() and check_image(str(path)):
+        return True
+
+    # Create parent directory if it doesn't exist
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Try to download and check the image
+    for i in range(attempts):
+        if download_image_from_url(url, str(path)) and check_image(str(path)):
+            return True
+        print(f"Attempt {i + 1} failed for {path}. Retrying...")
+
+    # If function hasn't returned, download or check has failed
+    print(f"Failed to download or validate {path} after {attempts} attempts.")
+    return False
+
+
+def parse_args():
+    """
+    Parses command-line arguments.
+
+    Returns:
+        argparse.Namespace: The parsed command-line arguments.
+    """
+    parser = argparse.ArgumentParser(
+        description="Downloads and validates images from a CSV file."
+    )
+    parser.add_argument(
+        "--dataset-dir", required=True, help="Directory where the dataset is located."
+    )
+    parser.add_argument(
+        "--csv-file",
+        required=True,
+        help="Relative path to the CSV file with image URLs and filenames.",
+    )
+    parser.add_argument(
+        "--output-dir",
+        required=True,
+        help="Relative path to the directory to save images.",
+    )
+    parser.add_argument(
+        "--num-workers",
+        type=int,
+        default=8,
+        help="Number of worker threads for downloading images.",
+    )
+    parser.add_argument(
+        "--max-attempts",
+        type=int,
+        default=3,
+        help="Max attempts to download an image before giving up.",
+    )
+    return parser.parse_args()
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="")
-    parser.add_argument("--data-root-dir", required=True, help="Dataset root directory")
-    parser.add_argument(
-        "--data-filename",
-        required=True,
-        help="CSV file containing image urls",
-    )
-    parser.add_argument(
-        "--image-base-dir",
-        required=True,
-        help="Directory within dataset root directory to save images",
-    )
-    args = parser.parse_args()
+    args = parse_args()
+    datafile = Path(args.dataset_dir) / args.csv_file
+    outdir = Path(args.dataset_dir) / args.output_dir
+    with open(datafile, "r") as f:
+        df = pd.read_csv(f)
 
-    datafile = os.path.join(args.data_root_dir, args.data_filename)
-    df = pd.read_csv(datafile)
-    outdir = os.path.join(args.data_root_dir, args.image_base_dir)
+    with concurrent.futures.ThreadPoolExecutor(
+        max_workers=args.num_workers
+    ) as executor:
+        futures = [
+            executor.submit(
+                download_and_check_image,
+                row["url"],
+                outdir / row["filename"],
+                args.max_attempts,
+            )
+            for _, row in df.iterrows()
+        ]
 
-    for _, row in tqdm(df.iterrows(), total=df.shape[0]):
-        url = row["url"]
-        out_file_name = row["filename"]
-        out_file_path = os.path.join(outdir, out_file_name)
+        for _ in tqdm(concurrent.futures.as_completed(futures), total=len(futures)):
+            pass
 
-        if not os.path.exists(out_file_path):
-            os.makedirs(os.path.dirname(out_file_path), exist_ok=True)
-            download_image_from_url(url, out_file_path)
-
-    print("Checking downloaded images...")
-    for _, row in tqdm(df.iterrows(), total=df.shape[0]):
-        url = row["url"]
-        out_file_name = row["filename"]
-        out_file_path = os.path.join(outdir, out_file_name)
-        check_downloaded_image(out_file_path, url)
     print("Done.")

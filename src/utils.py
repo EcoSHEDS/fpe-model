@@ -2,11 +2,59 @@ import os
 import logging
 import time
 import random
+import requests
+import shutil
 import numpy as np
 import pandas as pd
 import torch
+import torchvision.io
 from tqdm import tqdm
 from .losses import MSELoss, RankNetLoss
+
+
+def download_image_from_url(url: str, save_path: str) -> bool:
+    """
+    Downloads an image from a given URL and saves it to a specified path.
+
+    Args:
+        url (str): The URL of the image to download.
+        save_path (str): The path where the image should be saved.
+
+    Returns:
+        bool: Returns True if the download is successful, otherwise returns False.
+
+    """
+    try:
+        with requests.get(url, stream=True) as response:
+            # If the response indicates a successful HTTP request, proceed with the download
+            response.raise_for_status()
+            with open(save_path, "wb") as f:
+                shutil.copyfileobj(response.raw, f)
+    except requests.exceptions.RequestException as e:
+        # Log any errors encountered during the download
+        logging.error(f"Failed to download image from {url}. Error: {e}")
+        return False  # if download failed
+    return True  # if download is successful
+
+
+def check_image(image_path: str) -> bool:
+    """
+    Checks if an image can be read.
+
+    Args:
+        image_path (str): The path of the image to check.
+
+    Returns:
+        bool: Returns True if the image can be read, otherwise returns False.
+
+    """
+    try:
+        torchvision.io.read_image(image_path)
+    except RuntimeError as e:
+        # Log any errors encountered during the reading
+        logging.error(f"Cannot read image {image_path}. Error: {e}")
+        return False  # if the image cannot be read
+    return True  # if the image can be read
 
 
 def log(log_file):
