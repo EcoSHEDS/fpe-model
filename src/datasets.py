@@ -1,16 +1,16 @@
 import os
 import random
-from typing import Dict, Tuple
-import numpy as np
-import pandas as pd
 from abc import ABC, abstractmethod
 from itertools import combinations
+from typing import Dict, Tuple
+
+import numpy as np
+import pandas as pd
 from PIL import Image, ImageStat
+from sklearn.model_selection import StratifiedShuffleSplit
 from torch.utils.data import Dataset
 from torchvision.io import read_image
 from tqdm import tqdm
-from sklearn.model_selection import StratifiedShuffleSplit
-
 
 # class FlowPhotoTable(object):
 #     def __init__(

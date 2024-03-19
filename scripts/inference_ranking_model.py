@@ -130,7 +130,7 @@ def inference_ranking_model(args):
     )
 
     df = load_data(args.inference_data_file)
-    ds = FlowPhotoDataset(df, args.inference_image_root_dir)
+    ds = FlowPhotoDataset(df, args.inference_image_root_dir, col_label=args.col_label)
     image = ds.get_image(0)
     aspect = image.shape[2] / image.shape[1]
     # set up image transforms
@@ -146,7 +146,7 @@ def inference_ranking_model(args):
     )
     ds.transform = image_transforms["eval"]  # use eval transforms during inference
     dl = torch.utils.data.DataLoader(
-        ds, batch_size=args.batch_size, shuffle=False, num_workers=4
+        ds, batch_size=args.batch_size, shuffle=False, num_workers=24
     )
 
     # # # # # # # # # # # # # # # # # # # # # # # # #

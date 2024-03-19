@@ -138,33 +138,64 @@ def train_ranking_model(args):
     # # # # # # # # # # # # # # # # # # # # # # # # #
     # CREATE / LOAD DATA SPLITS
     # # # # # # # # # # # # # # # # # # # # # # # # #
-    df = load_data(args.data_file)
-    df = filter_data(df, args)
-    try:
-        splits = RandomStratifiedWindowFlow().split(df, 0.8, 0.1, 0.1)
-    except ValueError:
-        splits = RandomStratifiedWindowFlow().split(df, 0.8, 0.1, 0.1, window="day")
-    train_df, val_df, test_df = splits["train"], splits["val"], splits["test"]
+    # df = load_data(args.data_file)
+    train_df = pd.read_csv(args.train_data_file)
+    val_df = pd.read_csv(args.val_data_file)
+    test_df = pd.read_csv(args.test_data_file)
+    print(len(train_df), len(val_df), len(test_df))
+
+    # df = filter_data(df, args)
+    # try:
+    #     splits = RandomStratifiedWindowFlow().split(df, 0.8, 0.1, 0.1)
+    # except ValueError:
+    #     splits = RandomStratifiedWindowFlow().split(df, 0.8, 0.1, 0.1, window="day")
+    # train_df, val_df, test_df = splits["train"], splits["val"], splits["test"]
 
     # # split annotations directly into train/val/test (but data cannot be split)
     # train_df, val_df, test_df = df, df, df
 
-    # save the train/val/test splits
-    train_df.to_csv(os.path.join(args.exp_dir, "train_data.csv"))
-    args.logger.info(
-        f'Train split saved to {os.path.join(args.exp_dir, "train_data.csv")}'
-    )
-    val_df.to_csv(os.path.join(args.exp_dir, "val_data.csv"))
-    args.logger.info(f'Val split saved to {os.path.join(args.exp_dir, "val_data.csv")}')
-    test_df.to_csv(os.path.join(args.exp_dir, "test_data.csv"))
-    args.logger.info(
-        f'Test split saved to {os.path.join(args.exp_dir, "test_data.csv")}'
-    )
+    # # save the train/val/test splits
+    # train_df.to_csv(os.path.join(args.exp_dir, "train_data.csv"))
+    # args.logger.info(
+    #     f'Train split saved to {os.path.join(args.exp_dir, "train_data.csv")}'
+    # )
+    # val_df.to_csv(os.path.join(args.exp_dir, "val_data.csv"))
+    # args.logger.info(f'Val split saved to {os.path.join(args.exp_dir, "val_data.csv")}')
+    # test_df.to_csv(os.path.join(args.exp_dir, "test_data.csv"))
+    # args.logger.info(
+    #     f'Test split saved to {os.path.join(args.exp_dir, "test_data.csv")}'
+    # )
 
     # # # # # # # # # # # # # # # # # # # # # # # # #
     # CREATE PYTORCH DATASETS AND DATALOADERS
     # # # # # # # # # # # # # # # # # # # # # # # # #
-    train_ds = FlowPhotoRankingDataset(train_df, args.image_root_dir)
+    # Create two separate dataframes with same column names
+    df1 = train_df[["filename_1", "left.value"]].copy()
+    df1.columns = ["filename", "value"]
+    df2 = train_df[["filename_2", "right.value"]].copy()
+    df2.columns = ["filename", "value"]
+    # Concatenate the two dataframes
+    new_df = pd.concat([df1, df2], axis=0)
+    # Drop duplicates in terms of filename and keep the first occurence
+    new_df.drop_duplicates(subset=["filename"], keep="first", inplace=True)
+    train_ds = FlowPhotoRankingDataset(new_df, args.image_root_dir, col_label="value")
+    train_ds.ranked_image_pairs = [
+        (
+            np.where(new_df["filename"] == row["filename_1"])[0][0],
+            np.where(new_df["filename"] == row["filename_2"])[0][0],
+            row["pair_label"],
+        )
+        for ridx, row in train_df.iterrows()
+    ]
+    train_ds.ranked_image_pairs.extend(
+        [(pair[1], pair[0], -1 * pair[2]) for pair in train_ds.ranked_image_pairs]
+    )
+    # print(train_ds.table.iloc[0][train_ds.col_filename])
+    # print(train_ds.data_dir)
+    # print(train_ds.table.head())
+    # print(train_ds.ranked_image_pairs[0])
+    # assert False, 'break'
+
     # get dataset image means, std, and aspect ratio
     img_sample_mean, img_sample_std = train_ds.compute_mean_std()
     args.logger.info(f"Computed image channelwise means: {img_sample_mean}")
@@ -183,129 +214,169 @@ def train_ranking_model(args):
         normalization=args.normalize,
     )
     train_ds.transform = image_transforms["train"]
+
+    df1 = val_df[["filename_1", "left.value"]].copy()
+    df1.columns = ["filename", "value"]
+    df2 = val_df[["filename_2", "right.value"]].copy()
+    df2.columns = ["filename", "value"]
+    # Concatenate the two dataframes
+    new_df = pd.concat([df1, df2], axis=0)
+    # Drop duplicates in terms of filename and keep the first occurence
+    new_df.drop_duplicates(subset=["filename"], keep="first", inplace=True)
     val_ds = FlowPhotoRankingDataset(
-        val_df, os.path.dirname(args.image_root_dir), transform=image_transforms["eval"]
+        new_df, args.image_root_dir, transform=image_transforms["eval"]
     )
+    val_ds.ranked_image_pairs = [
+        (
+            np.where(new_df["filename"] == row["filename_1"])[0][0],
+            np.where(new_df["filename"] == row["filename_2"])[0][0],
+            row["pair_label"],
+        )
+        for ridx, row in val_df.iterrows()
+    ]
+    val_ds.ranked_image_pairs.extend(
+        [(pair[1], pair[0], -1 * pair[2]) for pair in val_ds.ranked_image_pairs]
+    )
+
+    df1 = test_df[["filename_1", "left.value"]].copy()
+    df1.columns = ["filename", "value"]
+    df2 = test_df[["filename_2", "right.value"]].copy()
+    df2.columns = ["filename", "value"]
+    # Concatenate the two dataframes
+    new_df = pd.concat([df1, df2], axis=0)
+    # Drop duplicates in terms of filename and keep the first occurence
+    new_df.drop_duplicates(subset=["filename"], keep="first", inplace=True)
     test_ds = FlowPhotoRankingDataset(
-        test_df,
-        os.path.dirname(args.image_root_dir),
+        new_df,
+        args.image_root_dir,
         transform=image_transforms["eval"],
     )
-    if args.annotations is not None:
-        # create ranked image pairs from annotations
-        annotations = pd.read_csv(args.annotations)
-        args.logger.info(
-            "Loaded %d annotations from %s" % (len(annotations), args.annotations)
+    test_ds.ranked_image_pairs = [
+        (
+            np.where(new_df["filename"] == row["filename_1"])[0][0],
+            np.where(new_df["filename"] == row["filename_2"])[0][0],
+            row["pair_label"],
         )
-        # filter annotations by which images are in the train/val/test data splits
-        train_ds.annotate_image_pairs(annotations, args.num_train_pairs)
-        val_ds.annotate_image_pairs(annotations, args.num_eval_pairs)
-        test_ds.annotate_image_pairs(annotations, args.num_eval_pairs)
+        for ridx, row in test_df.iterrows()
+    ]
+    test_ds.ranked_image_pairs.extend(
+        [(pair[1], pair[0], -1 * pair[2]) for pair in test_ds.ranked_image_pairs]
+    )
+    # if args.annotations is not None:
+    #     # create ranked image pairs from annotations
+    #     annotations = pd.read_csv(args.annotations)
+    #     args.logger.info(
+    #         "Loaded %d annotations from %s" % (len(annotations), args.annotations)
+    #     )
+    #     # filter annotations by which images are in the train/val/test data splits
+    #     train_ds.annotate_image_pairs(annotations, args.num_train_pairs)
+    #     val_ds.annotate_image_pairs(annotations, args.num_eval_pairs)
+    #     test_ds.annotate_image_pairs(annotations, args.num_eval_pairs)
 
-        # # split annotations directly into train/val/test (but data cannot be split)
-        # splits = DatasetSplitter().split(annotations, 0.8, 0.1, 0.1)
-        # train_ann, val_ann, test_ann = splits["train"], splits["val"], splits["test"]
-        # train_ds.annotate_image_pairs(train_ann, args.num_train_pairs)
-        # val_ds.annotate_image_pairs(val_ann, args.num_eval_pairs)
-        # test_ds.annotate_image_pairs(test_ann, args.num_eval_pairs)
+    #     # # split annotations directly into train/val/test (but data cannot be split)
+    #     # splits = DatasetSplitter().split(annotations, 0.8, 0.1, 0.1)
+    #     # train_ann, val_ann, test_ann = splits["train"], splits["val"], splits["test"]
+    #     # train_ds.annotate_image_pairs(train_ann, args.num_train_pairs)
+    #     # val_ds.annotate_image_pairs(val_ann, args.num_eval_pairs)
+    #     # test_ds.annotate_image_pairs(test_ann, args.num_eval_pairs)
 
-        args.logger.info(
-            "%d annotations fall in the train set"
-            % (
-                len(train_ds.ranked_image_pairs) / 2
-            )  # flipping pairs doubles ranked_image_pairs size
-        )
-        args.logger.info(
-            "%d annotations fall in the val set"
-            % (
-                len(val_ds.ranked_image_pairs) / 2
-            )  # flipping pairs doubles ranked_image_pairs size
-        )
-        args.logger.info(
-            "%d annotations fall in the test set"
-            % (
-                len(test_ds.ranked_image_pairs) / 2
-            )  # flipping pairs doubles ranked_image_pairs size
-        )
+    #     args.logger.info(
+    #         "%d annotations fall in the train set"
+    #         % (
+    #             len(train_ds.ranked_image_pairs) / 2
+    #         )  # flipping pairs doubles ranked_image_pairs size
+    #     )
+    #     args.logger.info(
+    #         "%d annotations fall in the val set"
+    #         % (
+    #             len(val_ds.ranked_image_pairs) / 2
+    #         )  # flipping pairs doubles ranked_image_pairs size
+    #     )
+    #     args.logger.info(
+    #         "%d annotations fall in the test set"
+    #         % (
+    #             len(test_ds.ranked_image_pairs) / 2
+    #         )  # flipping pairs doubles ranked_image_pairs size
+    #     )
 
-    else:
-        if args.pair_annotation_method == "oracle":
-            pair_annotator = OracleAnnotator(**args.pair_annotation_method_kwargs)
-        elif args.pair_annotation_method == "simulated_annotator":
-            pair_annotator = ProbabilisticAnnotator(
-                **args.pair_annotation_method_kwargs
-            )
-        elif args.pair_annotation_method == "file":
-            raise NotImplementedError
-        # create ranked image pairs from ground truth
-        train_ds.rank_image_pairs(
-            args.num_train_pairs,
-            pair_sampling_fn=pair_sampling_fn_map[args.pair_sampling_method],
-            pair_annotator=pair_annotator,
-        )
-        val_ds.rank_image_pairs(
-            args.num_eval_pairs,
-            pair_sampling_fn=pair_sampling_fn_map[args.pair_sampling_method],
-            pair_annotator=pair_annotator,
-        )
-        test_ds.rank_image_pairs(
-            args.num_eval_pairs,
-            pair_sampling_fn=pair_sampling_fn_map[args.pair_sampling_method],
-            pair_annotator=pair_annotator,
-        )
-        # save the train/val/test ranked image pairs
-        train_pairs = [
-            {
-                "idx1": idx1,
-                "idx2": idx2,
-                "fn1": train_ds.table.iloc[idx1][train_ds.col_filename],
-                "fn2": train_ds.table.iloc[idx2][train_ds.col_filename],
-                "label": label,
-            }
-            for idx1, idx2, label in train_ds.ranked_image_pairs
-        ]
-        pd.DataFrame(train_pairs).to_csv(os.path.join(args.exp_dir, "train_pairs.csv"))
-        args.logger.info(
-            f'Train pairs saved to {os.path.join(args.exp_dir, "train_pairs.csv")}'
-        )
-        val_pairs = [
-            {
-                "idx1": idx1,
-                "idx2": idx2,
-                "fn1": val_ds.table.iloc[idx1][val_ds.col_filename],
-                "fn2": val_ds.table.iloc[idx2][val_ds.col_filename],
-                "label": label,
-            }
-            for idx1, idx2, label in val_ds.ranked_image_pairs
-        ]
-        pd.DataFrame(val_pairs).to_csv(os.path.join(args.exp_dir, "val_pairs.csv"))
-        args.logger.info(
-            f'Val pairs saved to {os.path.join(args.exp_dir, "val_pairs.csv")}'
-        )
-        test_pairs = [
-            {
-                "idx1": idx1,
-                "idx2": idx2,
-                "fn1": test_ds.table.iloc[idx1][test_ds.col_filename],
-                "fn2": test_ds.table.iloc[idx2][test_ds.col_filename],
-                "label": label,
-            }
-            for idx1, idx2, label in test_ds.ranked_image_pairs
-        ]
-        pd.DataFrame(test_pairs).to_csv(os.path.join(args.exp_dir, "test_pairs.csv"))
-        args.logger.info(
-            f'Test pairs saved to {os.path.join(args.exp_dir, "test_pairs.csv")}'
-        )
+    # else:
+    #     if args.pair_annotation_method == "oracle":
+    #         pair_annotator = OracleAnnotator(**args.pair_annotation_method_kwargs)
+    #     elif args.pair_annotation_method == "simulated_annotator":
+    #         pair_annotator = ProbabilisticAnnotator(
+    #             **args.pair_annotation_method_kwargs
+    #         )
+    #     elif args.pair_annotation_method == "file":
+    #         raise NotImplementedError
+    #     # create ranked image pairs from ground truth
+    #     train_ds.rank_image_pairs(
+    #         args.num_train_pairs,
+    #         pair_sampling_fn=pair_sampling_fn_map[args.pair_sampling_method],
+    #         pair_annotator=pair_annotator,
+    #     )
+    #     val_ds.rank_image_pairs(
+    #         args.num_eval_pairs,
+    #         pair_sampling_fn=pair_sampling_fn_map[args.pair_sampling_method],
+    #         pair_annotator=pair_annotator,
+    #     )
+    #     test_ds.rank_image_pairs(
+    #         args.num_eval_pairs,
+    #         pair_sampling_fn=pair_sampling_fn_map[args.pair_sampling_method],
+    #         pair_annotator=pair_annotator,
+    #     )
+    #     # save the train/val/test ranked image pairs
+    #     train_pairs = [
+    #         {
+    #             "idx1": idx1,
+    #             "idx2": idx2,
+    #             "fn1": train_ds.table.iloc[idx1][train_ds.col_filename],
+    #             "fn2": train_ds.table.iloc[idx2][train_ds.col_filename],
+    #             "label": label,
+    #         }
+    #         for idx1, idx2, label in train_ds.ranked_image_pairs
+    #     ]
+    #     pd.DataFrame(train_pairs).to_csv(os.path.join(args.exp_dir, "train_pairs.csv"))
+    #     args.logger.info(
+    #         f'Train pairs saved to {os.path.join(args.exp_dir, "train_pairs.csv")}'
+    #     )
+    #     val_pairs = [
+    #         {
+    #             "idx1": idx1,
+    #             "idx2": idx2,
+    #             "fn1": val_ds.table.iloc[idx1][val_ds.col_filename],
+    #             "fn2": val_ds.table.iloc[idx2][val_ds.col_filename],
+    #             "label": label,
+    #         }
+    #         for idx1, idx2, label in val_ds.ranked_image_pairs
+    #     ]
+    #     pd.DataFrame(val_pairs).to_csv(os.path.join(args.exp_dir, "val_pairs.csv"))
+    #     args.logger.info(
+    #         f'Val pairs saved to {os.path.join(args.exp_dir, "val_pairs.csv")}'
+    #     )
+    #     test_pairs = [
+    #         {
+    #             "idx1": idx1,
+    #             "idx2": idx2,
+    #             "fn1": test_ds.table.iloc[idx1][test_ds.col_filename],
+    #             "fn2": test_ds.table.iloc[idx2][test_ds.col_filename],
+    #             "label": label,
+    #         }
+    #         for idx1, idx2, label in test_ds.ranked_image_pairs
+    #     ]
+    #     pd.DataFrame(test_pairs).to_csv(os.path.join(args.exp_dir, "test_pairs.csv"))
+    #     args.logger.info(
+    #         f'Test pairs saved to {os.path.join(args.exp_dir, "test_pairs.csv")}'
+    #     )
 
     # TODO: do we need worker_init_fn here for reproducibility?
     train_dl = torch.utils.data.DataLoader(
-        train_ds, batch_size=args.batch_size, shuffle=True, num_workers=4
+        train_ds, batch_size=args.batch_size, shuffle=True, num_workers=12
     )
     val_dl = torch.utils.data.DataLoader(
-        val_ds, batch_size=args.batch_size, shuffle=False, num_workers=4
+        val_ds, batch_size=args.batch_size, shuffle=False, num_workers=12
     )
     test_dl = torch.utils.data.DataLoader(
-        test_ds, batch_size=args.batch_size, shuffle=False, num_workers=4
+        test_ds, batch_size=args.batch_size, shuffle=False, num_workers=12
     )
 
     # # # # # # # # # # # # # # # # # # # # # # # # #

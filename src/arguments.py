@@ -8,8 +8,26 @@ def add_data_args(parser):
         required=True,
         help="name of site with linked images and flows",
     )
+    # group.add_argument(
+    #     "--data-file",
+    #     type=str,
+    #     required=True,
+    #     help="path to CSV file with linked images and flows",
+    # )
     group.add_argument(
-        "--data-file",
+        "--train-data-file",
+        type=str,
+        required=True,
+        help="path to CSV file with linked images and flows",
+    )
+    group.add_argument(
+        "--val-data-file",
+        type=str,
+        required=True,
+        help="path to CSV file with linked images and flows",
+    )
+    group.add_argument(
+        "--test-data-file",
         type=str,
         required=True,
         help="path to CSV file with linked images and flows",
@@ -26,30 +44,30 @@ def add_data_args(parser):
         default="timestamp",
         help="datetime column name in data-file",
     )
-    group.add_argument(
-        "--min-hour",
-        type=int,
-        default=0,
-        help="minimum timestamp hour for including samples in data-file",
-    )
-    group.add_argument(
-        "--max-hour",
-        type=int,
-        default=23,
-        help="maximum timestamp hour for including samples in data-file",
-    )
-    group.add_argument(
-        "--min-month",
-        type=int,
-        default=1,
-        help="minimum timestamp month for including samples in data-file",
-    )
-    group.add_argument(
-        "--max-month",
-        type=int,
-        default=12,
-        help="maximum timestamp month for including samples in data-file",
-    )
+    # group.add_argument(
+    #     "--min-hour",
+    #     type=int,
+    #     default=0,
+    #     help="minimum timestamp hour for including samples in data-file",
+    # )
+    # group.add_argument(
+    #     "--max-hour",
+    #     type=int,
+    #     default=23,
+    #     help="maximum timestamp hour for including samples in data-file",
+    # )
+    # group.add_argument(
+    #     "--min-month",
+    #     type=int,
+    #     default=1,
+    #     help="minimum timestamp month for including samples in data-file",
+    # )
+    # group.add_argument(
+    #     "--max-month",
+    #     type=int,
+    #     default=12,
+    #     help="maximum timestamp month for including samples in data-file",
+    # )
     # group.add_argument(
     #     "--split-idx",
     #     type=int,
