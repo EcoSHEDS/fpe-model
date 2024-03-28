@@ -1,26 +1,72 @@
-# export dataset for station and variable
-# usage: Rscript dataset.R <station_id> <variable_id> </path/to/datasets>
-# example: Rscript dataset.R 17 FLOW_CFS D:/fpe/datasets
+# export rank dataset for given station and variable
+# usage: Rscript rank-dataset.R --help
+# example: Rscript rank-dataset.R -d D:/fpe/rank -s 29 -v FLOW_CFS -V 20240326 -m 65
 
 Sys.setenv(TZ = "GMT")
 
-library(tidyverse)
-library(jsonlite)
-library(lubridate)
-library(logger)
-library(janitor)
-library(glue)
+suppressPackageStartupMessages({
+  library(tidyverse)
+  library(jsonlite)
+  library(lubridate)
+  library(logger)
+  library(janitor)
+  library(glue)
+  library(optparse)
+})
 
-MAX_DTIME <- 65 # max value interp gap
+default_version <- format(today(tz = "US/Eastern"), "%Y%m%d")
 
-args <- commandArgs(trailingOnly = TRUE)
-station_id <- parse_number(args[1])
-variable_id <- path.expand(args[2])
-output_dir <- path.expand(args[3])
+parser <- OptionParser()
+parser <- add_option(
+  parser, c("-d", "--directory"), type="character",
+  help="Path to root directory"
+)
+parser <- add_option(
+  parser, c("-s", "--station"), type="integer",
+  help="Station ID from database"
+)
+parser <- add_option(
+  parser, c("-v", "--variable"), type="character",
+  default="FLOW_CFS", help="Variable (default='FLOW_CFS')"
+)
+parser <- add_option(
+  parser, c("-V", "--version"), type="character",
+  default=default_version,
+  help=glue("Dataset version (default='{default_version}')")
+)
+parser <- add_option(
+  parser, c("-m", "--maxgap"), type="integer", default=65,
+  help="Maximum gap duration (minutes) for value interpolation (default=65)"
+)
+parser <- add_option(
+  parser, c("-o", "--overwrite"), action="store_true",
+  default=FALSE, help="Overwrite existing dataset (if exists)"
+)
+
+if (interactive()) {
+  args <- parse_args(parser, args = c(
+    "--directory=D:/fpe/rank",
+    "--station=11",
+    "--variable=FLOW_CFS",
+    "--version=20240327",
+    "--overwrite"
+  ))
+} else {
+  args <- parse_args(parser, args = commandArgs(trailingOnly = TRUE))
+}
+
+station_id <- args$station
+variable_id <- args$variable
+output_dir <- args$directory
+dataset_version <- args$version
+overwrite <- args$overwrite
+
+MAXGAP <- args$maxgap
 
 log_info("station_id: {station_id}")
 log_info("variable_id: {variable_id}")
 log_info("output_dir: {output_dir}")
+log_info("dataset_version: {dataset_version}")
 
 # dir.create(output_dir, showWarnings = FALSE, recursive = TRUE)
 stopifnot(dir.exists(output_dir))
@@ -35,6 +81,10 @@ con <- DBI::dbConnect(
   user = config$db$user,
   password = config$db$password
 )
+
+
+# functions ---------------------------------------------------------------
+
 
 fetch_station <- function(con, station_id) {
   DBI::dbGetQuery(con, "select * from stations where id = $1", list(station_id)) %>%
@@ -70,7 +120,9 @@ and i.status = 'DONE'
 fetch_station_flows_from_nwis <- function(station, start, end) {
   x_raw <- dataRetrieval::readNWISuv(station$nwis_id, parameterCd = "00060", startDate = as_date(start) - days(1), endDate = as_date(end) + days(1)) %>%
     tibble()
+
   if (nrow(x_raw) == 0) return(tibble())
+
   dataRetrieval::renameNWISColumns(x_raw) %>%
     select(timestamp = dateTime, value = Flow_Inst, flag = Flow_Inst_cd) %>%
     mutate(
@@ -87,19 +139,46 @@ fetch_station_flows_from_nwis <- function(station, start, end) {
     filter(!is.na(value))
 }
 
+find_max_dtime <- function(x, timestamps) {
+  first_index_after_x <- which(timestamps > x)[1]
+  if (is.na(first_index_after_x)) {
+    # x > all timestamps
+    return(NA_real_)
+  } else if (first_index_after_x == 1) {
+    # x < all timestamps
+    return(NA_real_)
+  }
+  timestamp_before <- timestamps[first_index_after_x - 1]
+  dtime_before <- as.numeric(difftime(timestamp_before, x, units = "mins"))
+  timestamp_after <- timestamps[first_index_after_x]
+  dtime_after <- as.numeric(difftime(timestamp_after, x, units = "mins"))
+  max(dtime_before, dtime_after)
+}
+
+
+# fetch -------------------------------------------------------------------
+
 log_info("fetching: station")
 station <- fetch_station(con, station_id)
 stopifnot(nrow(station) == 1)
 
-log_info("station.name: {station$name[[1]]}")
+log_info("station: {station$name[[1]]}")
 
-data_dir <- file.path(output_dir, station$name[[1]], variable_id)
-if (!dir.exists(data_dir)) {
-  log_info("data_dir: {data_dir} (created)")
-  dir.create(data_dir, showWarnings = FALSE, recursive = TRUE)
+dataset_dir <- file.path(output_dir, station$name[[1]], variable_id, dataset_version)
+if (!dir.exists(dataset_dir)) {
+  log_info("dataset_dir: {dataset_dir} (created)")
+  dir.create(dataset_dir, showWarnings = FALSE, recursive = TRUE)
 } else {
-  log_info("data_dir: {data_dir} (exists)")
+  if (overwrite) {
+    log_warn("dataset_dir: {dataset_dir} (already exists, overwriting)")
+  } else {
+    log_error("dataset_dir: {dataset_dir} (already exists, use flag --overwrite to replace it)")
+    stop("Dataset directory already exists")
+  }
 }
+
+data_dir <- file.path(dataset_dir, "dataset")
+dir.create(data_dir, showWarnings = FALSE, recursive = TRUE)
 
 log_info("saving: {file.path(data_dir, 'station.json')}")
 station %>%
@@ -124,41 +203,20 @@ if (value_source == "NWIS") {
 
 # images -------------------------------------------------------------
 
-find_max_dtime <- function(x, timestamps) {
-  first_index_after_x <- which(timestamps > x)[1]
-  if (is.na(first_index_after_x)) {
-    # x > all timestamps
-    return(NA_real_)
-  } else if (first_index_after_x == 1) {
-    # x < all timestamps
-    return(NA_real_)
-  }
-  timestamp_before <- timestamps[first_index_after_x - 1]
-  dtime_before <- as.numeric(difftime(timestamp_before, x, units = "mins"))
-  timestamp_after <- timestamps[first_index_after_x]
-  dtime_after <- as.numeric(difftime(timestamp_after, x, units = "mins"))
-  max(dtime_before, dtime_after)
-}
-
 if (nrow(values) > 0) {
   obs_values <- values %>%
     filter(
       timestamp >= min(images$timestamp, na.rm = TRUE) - days(1),
       timestamp <= max(images$timestamp, na.rm = TRUE) + days(1),
-      !is.na(value),
-      floor_date(timestamp, unit = "months") != ymd(20220501)
+      !is.na(value)
     ) %>%
     group_by(timestamp) %>%
     summarise(value = mean(value))
-    # mutate(
-    #   timestamp_hr = floor_date(timestamp, unit = "hours")
-    # ) %>%
-    # complete(timestamp_hr = seq(min(timestamp_hr), max(timestamp_hr), by = "hour")) %>%
-    # mutate(
-    #   timestamp = coalesce(timestamp, timestamp_hr)
-    # ) %>%
-    # select(-timestamp_hr)
+} else {
+  obs_values <- tibble()
+}
 
+if (nrow(obs_values) > 0) {
   interp_values <- approxfun(obs_values$timestamp, y = obs_values$value, na.rm = FALSE)
   value_timestamps <- sort(unique(obs_values$timestamp))
 
@@ -168,7 +226,7 @@ if (nrow(values) > 0) {
       filename = map_chr(url, ~ httr::parse_url(.)$path),
       interp_value = interp_values(timestamp),
       max_dtime = map_dbl(timestamp, \(x) find_max_dtime(x, value_timestamps)),
-      value = if_else(!is.na(max_dtime) & max_dtime <= MAX_DTIME, interp_value, NA_real_)
+      value = if_else(!is.na(max_dtime) & max_dtime <= MAXGAP, interp_value, NA_real_)
     ) %>%
     arrange(timestamp)
 
@@ -214,7 +272,24 @@ if (nrow(values) > 0) {
 
 log_info("saving: {file.path(data_dir, 'images.csv')}")
 images_values %>%
+  select(-interp_value, -max_dtime) %>%
   write_csv(file.path(data_dir, "images.csv"), na = "")
+
+if (nrow(values) > 0) {
+  log_info("saving: {file.path(data_dir, 'values.csv')}")
+  values %>%
+    write_csv(file.path(data_dir, "values.csv"), na = "")
+
+  p <- values %>%
+    ggplot(aes(timestamp, value)) +
+    geom_line() +
+    labs(
+      y = "value",
+      title = glue("{station$name[[1]]} (ID={station_id}) | {variable_id}")
+    )
+  log_info("saving: {file.path(data_dir, 'values.png')}")
+  ggsave(file.path(data_dir, "values.png"), p, width = 8, height = 4)
+}
 
 # annotations -------------------------------------------------------------
 
@@ -294,6 +369,34 @@ stopifnot(
   all(!is.na(annotations$right.url))
 )
 
+if (nrow(annotations) > 0) {
+  p <- annotations %>%
+    ggplot(aes(left.timestamp, right.timestamp)) +
+    geom_point(aes(color = rank), size = 0.5) +
+    scale_x_datetime(date_breaks = "2 months", date_labels = "%b %Y") +
+    scale_y_datetime(date_breaks = "2 months", date_labels = "%b %Y") +
+    labs(
+      title = glue("{station$name[[1]]} (ID={station_id}) | {variable_id}")
+    ) +
+    theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5))
+  log_info("saving: {file.path(data_dir, 'annotations-splot.png')}")
+  ggsave(file.path(data_dir, "annotations-splot.png"), p, width = 8, height = 6)
+
+  p <- tibble(timestamp = c(annotations$left.timestamp, annotations$right.timestamp)) %>%
+    arrange(timestamp) %>%
+    mutate(n = row_number()) %>%
+    ggplot(aes(timestamp, n)) +
+    geom_line() +
+    scale_x_datetime(date_breaks = "2 months", date_labels = "%b %Y") +
+    labs(
+      y = "cumul. # annotated images",
+      title = glue("{station$name[[1]]} (ID={station_id}) | {variable_id}")
+    ) +
+    theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5))
+  log_info("saving: {file.path(data_dir, 'annotations-cumul.png')}")
+  ggsave(file.path(data_dir, "annotations-cumul.png"), p, width = 8, height = 4)
+}
+
 log_info("saving: {file.path(data_dir, 'annotations.csv')}")
 annotations %>%
   write_csv(file.path(data_dir, "annotations.csv"), na = "")
@@ -323,7 +426,7 @@ values:
   start:  {format(min(values$timestamp), usetz = TRUE)}
   end:    {format(max(values$timestamp), usetz = TRUE)}
   freq:   {median(as.numeric(difftime(sort(unique(values$timestamp)), lag(sort(unique(values$timestamp))), units = 'mins')), na.rm = TRUE)} min (median)
-  maxgap: {MAX_DTIME} min
+  maxgap: {MAXGAP} min
 ")
 } else {
   values_log <- glue("
@@ -348,11 +451,15 @@ annotations:
 }
 
 glue("
-station:  {station$name[[1]]} (ID={station_id})
-variable: {variable_id}
-exported: {now()}
+dataset:
+  created: {now()}
+  station: {station_id} ('{station$name[[1]]}')
+  variable: {variable_id}
+  version: {dataset_version}
 {images_log}
 {values_log}
 {annotations_log}
 ") %>%
-  write_file(file.path(data_dir, "export.log"))
+  write_file(file.path(data_dir, "rank-dataset.log"))
+
+DBI::dbDisconnect(con)
