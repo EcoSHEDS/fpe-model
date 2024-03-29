@@ -26,10 +26,7 @@ from utils import (
     fit,
     validate,
 )
-from datasets import (
-    FlowPhotoRankingDataset,
-    FlowPhotoRankingPairsDataset,
-)
+from datasets import FlowPhotoRankingPairsDataset
 from modules import ResNetRankNet
 from losses import RankNetLoss
 
@@ -112,26 +109,32 @@ def train(args):
     set_seeds(args.random_seed)
 
     print("loading pairs from csv files")
-    train_df = load_pairs(os.path.join(args.values_dir, "pairs-train.csv"))
-    val_df = load_pairs(os.path.join(args.values_dir, "pairs-val.csv"))
-    test_df = load_pairs(os.path.join(args.values_dir, "pairs-test.csv"))
+    pairs_df = load_pairs(os.path.join(args.values_dir, args.pairs_file))
+    train_df = pairs_df[pairs_df['split'] == "train"]
+    print(f"train_df: {train_df.shape[0]} rows")
+    val_df = pairs_df[pairs_df['split'] == "val"]
+    print(f"val_df: {val_df.shape[0]} rows")
 
     print("creating train dataset")
     train_ds = FlowPhotoRankingPairsDataset(
         train_df,
         args.images_dir,
     )
+
     print("computing image stats")
     img_sample_mean, img_sample_std = train_ds.compute_mean_std(args.num_image_stats)
     print(f"img_sample_mean: {img_sample_mean}")
     print(f"img_sample_std: {img_sample_std}")
+
     pair = train_ds.get_pair(0)
     image = train_ds.get_image(pair["filename_1"])
     aspect = image.shape[2] / image.shape[1]
     resize_shape = [args.input_size, np.int32(args.input_size * aspect)]
     print(f"resize_shape: {resize_shape}")
+
     input_shape = [np.int32(args.input_size * 0.8), np.int32(args.input_size * 0.8 * aspect)]
     print(f"input_shape: {input_shape}")
+
     image_transforms = create_image_transforms(
         resize_shape,
         input_shape,
@@ -142,7 +145,8 @@ def train(args):
         normalization=args.normalize,
     )
     train_ds.transform = image_transforms["train"]
-    print("creating val/test datasets")
+
+    print("creating val datasets")
     print(f"val df: {len(val_df)}")
     val_ds = FlowPhotoRankingPairsDataset(
         val_df,
@@ -150,24 +154,13 @@ def train(args):
         transform=image_transforms["eval"],
     )
     print(f"val ds: {len(val_ds)}")
-    print(f"test df: {len(test_df)}")
-    test_ds = FlowPhotoRankingPairsDataset(
-        test_df,
-        args.images_dir,
-        transform=image_transforms["eval"],
-    )
-    print(f"test ds: {len(test_ds)}")
 
     print("creating data loaders")
-    # TODO: do we need worker_init_fn here for reproducibility?
     train_dl = torch.utils.data.DataLoader(
         train_ds, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers
     )
     val_dl = torch.utils.data.DataLoader(
         val_ds, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers
-    )
-    test_dl = torch.utils.data.DataLoader(
-        test_ds, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers
     )
 
     # # # # # # # # # # # # # # # # # # # # # # # # #
@@ -214,7 +207,6 @@ def train(args):
     metriclogs["epoch"] = []
     metriclogs["train_loss"] = []
     metriclogs["val_loss"] = []
-    metriclogs["test_loss"] = []
 
     # # # # # # # # # # # # # # # # # # # # # # # # #
     # TRAIN
@@ -227,38 +219,27 @@ def train(args):
         metriclogs["epoch"].append(epoch)
 
         start_time = time.time()
-        avg_loss_training = fit(
+        train_loss = fit(
             model, criterion, optimizer, train_dl, device, epoch_num=epoch
         )
         stop_time = time.time()
-        metriclogs["train_loss"].append(avg_loss_training)
+        metriclogs["train_loss"].append(train_loss)
         print("train step took %0.1f s" % (stop_time - start_time))
-        print("train loss = %0.2f" % (avg_loss_training))
+        print("train loss = %0.2f" % (train_loss))
 
         # validate on val set
         start_time = time.time()
-        valset_eval = validate(model, [criterion], val_dl, device)
+        val_loss = validate(model, [criterion], val_dl, device)
         stop_time = time.time()
-        metriclogs["val_loss"].append(valset_eval[0])
+        metriclogs["val_loss"].append(val_loss[0])
         print("val step took %0.1f s" % (stop_time - start_time))
-        print("val loss = %0.2f" % (valset_eval[0]))
+        print("val loss = %0.2f" % (val_loss[0]))
         print(
-            f"[Epoch {epoch}|val]\t{(stop_time - start_time):.2f} s\t{(valset_eval[0]):.4f}"
-        )
-
-        # validate on test set (peeking)
-        start_time = time.time()
-        testset_eval = validate(model, [criterion], test_dl, device)
-        stop_time = time.time()
-        metriclogs["test_loss"].append(testset_eval[0])
-        print("test step took %0.1f s" % (stop_time - start_time))
-        print("test loss = %0.2f" % (testset_eval[0]))
-        print(
-            f"[Epoch {epoch}|test]\t{(stop_time - start_time):.2f} s\t{(testset_eval[0]):.4f}"
+            f"[Epoch {epoch}|val]\t{(stop_time - start_time):.2f} s\t{(val_loss[0]):.4f}"
         )
 
         # update lr scheduler
-        scheduler.step(valset_eval[0])
+        scheduler.step(val_loss[0])
 
         # periodically save model checkpoints and metrics
         epoch_checkpoint_file = "epoch_%02d" % epoch + ".pth"
@@ -275,7 +256,7 @@ def train(args):
                 "epoch": epoch,
                 "model_state_dict": model.state_dict(),
                 "optimizer_state_dict": optimizer.state_dict(),
-                "training_loss": avg_loss_training,
+                "training_loss": train_loss,
                 "transforms": image_transforms,
                 "params": {
                     "aspect": aspect,
@@ -287,14 +268,14 @@ def train(args):
             epoch_checkpoint_save_path,
         )
 
-        if (min_val_loss is None or valset_eval[0] < min_val_loss):
+        if (min_val_loss is None or val_loss[0] < min_val_loss):
             if (min_val_loss is None):
-                print(f"updating final model (epoch={epoch}), first val loss ({valset_eval[0]:0.3f})")
+                print(f"updating final model (epoch={epoch}), first val loss ({val_loss[0]:0.3f})")
             else:
-                print(f"updating final model (epoch={epoch}), lowest val loss ({valset_eval[0]:0.3f} < {min_val_loss:0.3f})")
+                print(f"updating final model (epoch={epoch}), lowest val loss ({val_loss[0]:0.3f} < {min_val_loss:0.3f})")
             final_model_path = os.path.join(args.model_dir, "model.pth")
             shutil.copy(epoch_checkpoint_save_path, final_model_path)
-            min_val_loss = valset_eval[0]
+            min_val_loss = val_loss[0]
 
         metrics_checkpoint_file = "metrics.csv"
         metrics_checkpoint_save_path = os.path.join(
@@ -374,16 +355,8 @@ if __name__ == "__main__":
 
     # input files
     parser.add_argument(
-        "--file-train", type=str, default="pairs-train.csv",
-        help="filename of CSV file with pairs for train split",
-    )
-    parser.add_argument(
-        "--file-val", type=str, default="pairs-val.csv",
-        help="filename of CSV file with pairs for val split",
-    )
-    parser.add_argument(
-        "--file-test", type=str, default="pairs-test.csv",
-        help="filename of CSV file with pairs for test split",
+        "--pairs-file", type=str, default="pairs.csv",
+        help="filename of CSV file with annotated image pairs",
     )
 
     train(parser.parse_args())

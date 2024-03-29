@@ -1,6 +1,0 @@
-/md_v5a.0.0.pt
-/md_v5b.0.0.pt
-
-*.torchscript
-*.mar
-*.tar.gz

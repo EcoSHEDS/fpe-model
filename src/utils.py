@@ -1,66 +1,11 @@
-import os
-import logging
 import time
 import random
 import numpy as np
 import pandas as pd
 from urllib.parse import urlparse
 from tqdm import tqdm
-from losses import MSELoss, RankNetLoss
+from losses import RankNetLoss
 import torch
-
-
-def log(log_file):
-    console_logging_format = "%(levelname)s %(message)s"
-    file_logging_format = "%(levelname)s: %(asctime)s: %(message)s"
-
-    # configure logger
-    logging.basicConfig(level=logging.INFO, format=console_logging_format)
-    logger = logging.getLogger()
-
-    # create a file handler for output file
-    handler = logging.FileHandler(log_file)
-
-    # set the logging level for log file
-    handler.setLevel(logging.INFO)
-
-    # create a logging format
-    formatter = logging.Formatter(file_logging_format)
-    handler.setFormatter(formatter)
-
-    # add the handlers to the logger
-    logger.addHandler(handler)
-
-    return logger
-
-
-# https://stackoverflow.com/a/47087513
-def next_path(path_pattern):
-    """
-    Finds the next free path in an sequentially named list of files
-
-    e.g. path_pattern = 'file-%s.txt':
-
-    file-1.txt
-    file-2.txt
-    file-3.txt
-
-    Runs in log(n) time where n is the number of existing files in sequence
-    """
-    i = 1
-
-    # First do an exponential search
-    while os.path.exists(path_pattern % i):
-        i = i * 2
-
-    # Result lies somewhere in the interval (i/2..i]
-    # We call this interval (a..b] and narrow it down until a + 1 = b
-    a, b = (i // 2, i)
-    while a + 1 < b:
-        c = (a + b) // 2  # interval midpoint
-        a, b = (c, b) if os.path.exists(path_pattern % c) else (a, c)
-
-    return path_pattern % b
 
 def get_url_path(url):
     return urlparse(url).path[1:]
@@ -95,81 +40,6 @@ def load_pairs(data_file):
     df['timestamp_1'] = pd.to_datetime(df['timestamp_1'])
     df['timestamp_2'] = pd.to_datetime(df['timestamp_2'])
     return df
-
-def convert_tz(df, tz: str, datetime_col: str = "timestamp"):
-    """Convert a column in a DataFrame from one time zone to another.
-
-    Args:
-        df (pd.DataFrame): DataFrame containing a Datetime column.
-        tz (str): Time zone to convert Datetime column to.
-        datetime_col (str, optional): Name of the Datetime column to convert to the specified time zone. Defaults to "timestamp".
-
-    Returns:
-        pd.DataFrame: DataFrame with the Datetime column converted to the specified time zone.
-    """
-    df[datetime_col] = df[datetime_col].dt.tz_convert(tz=tz)
-    return df
-
-
-def filter_by_hour(df, min_hour=7, max_hour=18, datetime_col="timestamp"):
-    """Filter DataFrame rows based on hour of day in a Datetime column.
-
-    The hour of each Datetime value ranges from 0 to 23. Rows whose Datetime column hour values are (strictly)
-    less than min_hour will be excluded. Similarly, rows whose Datetime column hour values are (strictly) greater
-    thank max_hour will be excluded.
-
-    That is, filter_by_hour with min_hour=7 and max_hour=18 returns only rows whose Datetime column is between
-    7:00:00 AM and 6:59:59 PM inclusive.
-
-    Args:
-        df (pd.DataFrame): DataFrame containing a Datetime column.
-        min_hour (int, optional): Minimum value for Datetime hour values. Defaults to 7.
-        max_hour (int, optional): Maximum value for Datetime hour vaues. Defaults to 18.
-        datetime_col (str, optional): Name of the Datetime column to use for filtering. Defaults to "timestamp".
-
-    Returns:
-        pd.DataFrame: Filtered DataFrame with entries whose Datetime hour is before min_hour or after max_hour removed.
-    """
-    df = df[df[datetime_col].dt.hour.between(min_hour, max_hour)]
-    return df
-
-
-def filter_by_month(df, min_month=4, max_month=11, col_timestamp="timestamp"):
-    """Filter DataFrame rows based on month of year in a Datetime column.
-
-    The month of each Datetime value ranges from 1 to 12. Rows whose Datetime column month values are (strictly)
-    less than min_month will be excluded. Similarly, rows whose Datetime column month values are (strictly) greater
-    thank max_month will be excluded.
-
-    That is, filter_by_month with min_month=4 and max_month=11 returns only rows whose Datetime column is between
-    April and November inclusive.
-
-    Args:
-        df (pd.DataFrame): DataFrame containing a Datetime column.
-        min_month (int, optional): Minimum value for Datetime month values. Defaults to 4.
-        max_month (int, optional): Maximum value for Datetime month vaues. Defaults to 11`.
-        datetime_col (str, optional): Name of the Datetime column to use for filtering. Defaults to "timestamp".
-
-    Returns:
-        pd.DataFrame: Filtered DataFrame with entries whose Datetime month is before min_month or after max_month removed.
-    """
-    df = df[df[col_timestamp].dt.month.between(min_month, max_month)]
-    return df
-
-
-def filter_by_date(df, start_date, end_date, col_timestamp="timestamp", mode="exclude"):
-    if mode == "exclude":
-        before_start_date = df[col_timestamp] < start_date
-        after_end_date = df[col_timestamp] > end_date
-        outside_two_dates = before_start_date | after_end_date
-        filtered_dates = df.loc[outside_two_dates].copy()
-        df = filtered_dates
-        return df
-    else:
-        raise NotImplementedError(
-            'Please select "exclude" mode and provide date range to exclude.'
-        )
-
 
 def get_output_shape(model, input_shape=(1, 3, 224, 224)):
     x = torch.randn(*input_shape)
@@ -242,8 +112,6 @@ def fit(model, criterion, optimizer, train_dl, device, epoch_num=None, verbose=F
         criterion (torch.nn.Module): loss function(s) used to train network weights
         optimizer (torch.optim.Optimizer): algorithm used to optimize network weights
         train_dl (torch.utils.DataLoader): data loader for training set
-        epoch_num (int): epoch number for logging
-
     Returns:
         batch_loss_logger.avg (float): average criterion loss per batch during training
     """

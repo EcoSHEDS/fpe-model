@@ -1,4 +1,4 @@
-# Flow Photo Explorer Deep Learning Model
+# Flow Photo RankNet Model
 
 An [EcoSHEDS](https://www.usgs.gov/apps/ecosheds/) Project
 
@@ -6,24 +6,44 @@ An [EcoSHEDS](https://www.usgs.gov/apps/ecosheds/) Project
 
 ## Background
 
-This repo contains the source code for a deep learning model designed to estimate streamflow (or other hydrologic metrics) using timelapse imagery. This model will ultimately be integrated in the [EcoSHEDS Flow Photo Explorer](https://www.usgs.gov/apps/ecosheds/fpe/).
+This repo contains the source code for a deep learning model designed to estimate streamflow (or other hydrologic metrics) using timelapse imagery. This model is integrated into the [EcoSHEDS Flow Photo Explorer](https://www.usgs.gov/apps/ecosheds/fpe/).
 
-Original development of this model was completed by Amrita Gupta and Tony Chang at [Conservation Science Partners Inc](https://www.csp-inc.org/) with funding from the U.S. Geological Survey and the National Geographic Society. See the following paper for more information:
+Original development of this model was completed by Amrita Gupta at [Microsoft AI For Good Lab](https://www.microsoft.com/en-us/research/group/ai-for-good-research-lab/) and Tony Chang at [Conservation Science Partners](https://www.csp-inc.org/) with funding from the U.S. Geological Survey and the National Geographic Society.
+
+Preliminary research and model development can be found in:
 
 > Gupta, A., Chang, T., Walker, J., and Letcher, B. (2022). *Towards Continuous Streamflow Monitoring with Time-Lapse Cameras and Deep Learning.* In ACM SIGCAS/SIGCHI Conference on Computing and Sustainable Societies (COMPASS) (COMPASS '22). Association for Computing Machinery, New York, NY, USA, 353–363. https://doi.org/10.1145/3530190.3534805
 
 ## Python Environment
 
-Create conda environment
+Environment should match the python and torch versions of an [available SageMaker container](https://github.com/aws/deep-learning-containers/blob/master/available_images.md).
+
+The FPE RankNet model currently uses python=3.9, torch=1.13.1, and torchvision=0.14.1.
+
+If using Ubuntu, create conda environment:
 
 ```sh
 conda env create -f environment.yml
 ```
 
+Otherwise, create the environment manually:
+
+```sh
+conda create -n fpe-rank python=3.9
+conda activate fpe-rank
+conda config --env --add channels conda-forge
+conda install jupyterlab numpy pandas scikit-learn tqdm
+conda install boto3 sagemaker
+
+# see https://pytorch.org/get-started/previous-versions/
+pip install torch==1.13.1
+pip install torchvision==0.14.1
+```
+
 Activate conda environment and start Jupyter Lab
 
 ```sh
-conda activate fpe-model
+conda activate fpe-rank
 jupyter lab
 ```
 
@@ -41,7 +61,7 @@ FPE_VARIABLE=FLOW_CFS
 cd r
 Rscript rank-dataset.R -d "${FPE_DIR}" -s "${FPE_STATION}" -v "${FPE_VARIABLE}" -o
 # check annotations-cumul.png for training cutoff (annotations-end)
-Rscript rank-input.R -d "${FPE_DIR}" -s "${FPE_STATION}" -v "${FPE_VARIABLE}" -o --min-hour=7 --max-hour=18 --annotations-end=2023-08-31
+Rscript rank-input.R -d "${FPE_DIR}" -s "${FPE_STATION}" -v "${FPE_VARIABLE}" -o
 ```
 
 ### Flow Photo Dataset
@@ -50,15 +70,15 @@ A flow photo dataset contains the images and annotations associated with a singl
 
 Datasets are stored using the following directory schema
 
-`<STATION.NAME>/<VARIABLE>/<DATASET_ID>/data`
+`<STATION.NAME>/<VARIABLE>/<DATASET_VERSION>/data`
 
-The `<DATASET_ID>` is typically a date stamp (`YYYYMMDD`).
+The `<DATASET_VERSION>` is typically a date stamp (`YYYYMMDD`).
 
 For example: `~/fpe/West Brook 0_01171100/FLOW_CFS/20240326/data`.
 
 Each dataset contains:
 
-- `annotations.csv`: annotations dataset
+- `pairs.csv`: annotations dataset
 - `annotations.png`: plot of annotations
 - `images.csv`: images dataset (with observed data if available)
 - `images.png`: timeseries plot of observed values for each image
@@ -85,37 +105,31 @@ The images dataset is filtered based on two sets of parameters:
 
 The annotations dataset is filtered to only include image pairs where both images are in the filtered dataset. The annotations can then be further filtered based on:
 
-- ANNOTATION_MIN_DATE, ANNOTATION_MAX_DATE: minimum and maximum dates of the annotation pairs
+- `ANNOTATION_MIN_DATE, ANNOTATION_MAX_DATE`: minimum and maximum dates of the annotation pairs
 
-The model inputs will be saved using the following schema: 
+The model inputs will be saved using the following schema:
 
-`/path/to/<STATION.NAME>/<VARIABLE>/<DATASET_ID>/models/<MODEL_TYPE>/<MODEL_ID>`
+`/path/to/<STATION.NAME>/<VARIABLE>/<DATASET_VERSION>/models/<MODEL_VERSION>`
 
-Similar to the `<DATASET_ID>`, the `<MODEL_ID>` is typically a date stamp (`YYYYMMDD`), but does not necessarily need to match the `<DATASET_ID>` since the multiple models can be trained from the same dataset.
+Similar to the `<DATASET_VERSION>`, the `<MODEL_VERSION>` is typically a date stamp (`YYYYMMDD`), but does not necessarily need to match the `<DATASET_VERSION>` since the multiple models can be trained from the same dataset.
 
-For example: `~/fpe/West Brook 0_01171100/FLOW_CFS/20240326/models/RANK/20240328`.
+For example: `~/fpe/rank/West Brook 0_01171100/FLOW_CFS/20240326/models/20240328`.
 
 The inputs are generated using the `rank-input.R` script:
 
 ```sh
 cd r
-Rscript rank-input.R <DATASET/DIR> <STATION_ID> <VARIABLE_ID> <DATASET_ID> <MODEL_ID>
+Rscript rank-input.R <DATASET/DIR> <STATION_ID> <VARIABLE_ID> <DATASET_VERSION> <MODEL_VERSION>
 Rscript rank-input.R </path/to/datasets> 29 FLOW_CFS 20240326 20240328
 ```
 
-## Development Notebooks
+## Model Training
 
-The `dev` folder contains a number of notebooks used during model development.
+See `rank-train.ipynb`
 
-## Train Model
+## Model Inference
 
-The regression model code is contained within the `fpe-regression.py` file. A similar file for the ranking model will soon be developed.
-
-The `fpe-regression.py` file contains code for training the FPE PyTorch regression model. This file is designed to be uploaded to sagemaker, which trains the model using data stored in an S3 bucket. However, it can also be run locally at the command line.
-
-This workflow was developed based on the MNIST tutorial: https://github.com/aws/amazon-sagemaker-examples/tree/main/sagemaker-python-sdk/pytorch_mnist
-
-An application of the model is provided in `regression-parkers_brook.ipynb`.
+See `rank-inference.ipynb`
 
 ## License
 
