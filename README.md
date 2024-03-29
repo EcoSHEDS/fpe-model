@@ -31,7 +31,77 @@ Then navigate to http://localhost:8888
 
 ## Datasets
 
-Each dataset (flow and images) should be saved to `data/<site name>`. Within each site folder, there should be an `images/` folder containing the flow photos in `JPG` format and a `CSV` file called `images.csv` containing columns `filename`, `timestamp`, and `flow_cfs`.
+Quick start:
+
+```sh
+FPE_DIR=D:/fpe/datasets
+FPE_STATION=29
+FPE_VARIABLE=FLOW_CFS
+
+cd r
+Rscript rank-dataset.R -d "${FPE_DIR}" -s "${FPE_STATION}" -v "${FPE_VARIABLE}" -o
+# check annotations-cumul.png for training cutoff (annotations-end)
+Rscript rank-input.R -d "${FPE_DIR}" -s "${FPE_STATION}" -v "${FPE_VARIABLE}" -o --min-hour=7 --max-hour=18 --annotations-end=2023-08-31
+```
+
+### Flow Photo Dataset
+
+A flow photo dataset contains the images and annotations associated with a single monitoring station and for a single variable. If observed data (e.g., streamflow) are available for that variable, then the images file includes the observed value at each image timestamp. These observed values are estimated using linear interpolation of the raw observations.
+
+Datasets are stored using the following directory schema
+
+`<STATION.NAME>/<VARIABLE>/<DATASET_ID>/data`
+
+The `<DATASET_ID>` is typically a date stamp (`YYYYMMDD`).
+
+For example: `~/fpe/West Brook 0_01171100/FLOW_CFS/20240326/data`.
+
+Each dataset contains:
+
+- `annotations.csv`: annotations dataset
+- `annotations.png`: plot of annotations
+- `images.csv`: images dataset (with observed data if available)
+- `images.png`: timeseries plot of observed values for each image
+- `station.json`: station info from database
+
+A dataset is generated using the `dataset.R` script.
+
+```sh
+cd r
+Rscript dataset.R <STATION_ID> <VARIABLE_ID> </path/to/datasets>
+Rscript dataset.R 29 FLOW_CFS D:/fpe/datasets
+```
+
+### Model Input Dataset
+
+A model input dataset contains the images and annotations for a specific execution of the model training and inference pipeline.
+
+This dataset is generated from a flow photo dataset, which contains all images and annotations for a single station.
+
+The images dataset is filtered based on two sets of parameters:
+
+- MIN_HOUR, MAX_HOUR: minimum and maximum hours of the day (local time) (e.g., MIN_HOUR=7, MAX_HOUR=18 yields a dataset containing only images from 7:00AM to 6:59PM)
+- MIN_MONTH, MAX_MONTH: minimum and maximum month (e.g., MIN_MONTH=4, MAX_MONTH=11 yields dataset containing only images from Apr 1 - Nov 31)
+
+The annotations dataset is filtered to only include image pairs where both images are in the filtered dataset. The annotations can then be further filtered based on:
+
+- ANNOTATION_MIN_DATE, ANNOTATION_MAX_DATE: minimum and maximum dates of the annotation pairs
+
+The model inputs will be saved using the following schema: 
+
+`/path/to/<STATION.NAME>/<VARIABLE>/<DATASET_ID>/models/<MODEL_TYPE>/<MODEL_ID>`
+
+Similar to the `<DATASET_ID>`, the `<MODEL_ID>` is typically a date stamp (`YYYYMMDD`), but does not necessarily need to match the `<DATASET_ID>` since the multiple models can be trained from the same dataset.
+
+For example: `~/fpe/West Brook 0_01171100/FLOW_CFS/20240326/models/RANK/20240328`.
+
+The inputs are generated using the `rank-input.R` script:
+
+```sh
+cd r
+Rscript rank-input.R <DATASET/DIR> <STATION_ID> <VARIABLE_ID> <DATASET_ID> <MODEL_ID>
+Rscript rank-input.R </path/to/datasets> 29 FLOW_CFS 20240326 20240328
+```
 
 ## Development Notebooks
 
