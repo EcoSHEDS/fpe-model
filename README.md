@@ -41,7 +41,7 @@ FPE_VARIABLE=FLOW_CFS
 cd r
 Rscript rank-dataset.R -d "${FPE_DIR}" -s "${FPE_STATION}" -v "${FPE_VARIABLE}" -o
 # check annotations-cumul.png for training cutoff (annotations-end)
-Rscript rank-input.R -d "${FPE_DIR}" -s "${FPE_STATION}" -v "${FPE_VARIABLE}" -o --min-hour=7 --max-hour=18 --annotations-end "2023-08-31"
+Rscript rank-input.R -d "${FPE_DIR}" -s "${FPE_STATION}" -v "${FPE_VARIABLE}" -o --min-hour=7 --max-hour=18 --annotations-end=2023-08-31
 ```
 
 ### Flow Photo Dataset
@@ -64,7 +64,7 @@ Each dataset contains:
 - `images.png`: timeseries plot of observed values for each image
 - `station.json`: station info from database
 
-A dataset is generated using the `dataset.R` script. 
+A dataset is generated using the `dataset.R` script.
 
 ```sh
 cd r
