@@ -1,5 +1,5 @@
 ---
-title: "Rank Model Predictions | `r params$site` | `r params$model_id`"
+title: "FPE Rank Model Diagnostics"
 format:
   html:
     toc: true
@@ -7,134 +7,128 @@ format:
     page-layout: full
     self-contained: true
 params:
-  root_dir: "D:/fpe/sites"
-  site: "WESTB0"
-  model_id: "20230920"
+  root_dir: "/mnt/d/fpe/rank"
+  site: "West Brook 0_01171100"
+  variable: "FLOW_CFS"
+  dataset_version: "20240327"
+  model_version: "20240328"
 editor_options: 
   chunk_output_type: console
 ---
 
 
 ```{r setup, echo=FALSE, warning=FALSE}
-suppressPackageStartupMessages(library(tidyverse))
-suppressPackageStartupMessages(library(lubridate))
-suppressPackageStartupMessages(library(glue))
-suppressPackageStartupMessages(library(patchwork))
+suppressPackageStartupMessages({
+  library(tidyverse)
+  library(lubridate)
+  library(glue)
+  library(patchwork)
+})
 
 knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE, fig.width = 12)
 
 # params <- list(
-#   root_dir = "D:/fpe/sites",
-#   site = "MITCHB",
-#   model_id = "20230928"
+#   root_dir = "/mnt/d/fpe/rank",
+#   site = "West Brook 0_01171100",
+#   variable = "FLOW_CFS",
+#   dataset_version = "20240327",
+#   model_version = "20240328"
 # )
 
 site_dir <- file.path(params$root_dir, params$site)
-model_dir <- file.path(site_dir, "models", params$model_id)
+dataset_dir <- file.path(site_dir, params$variable, params$dataset_version)
+model_dir <- file.path(dataset_dir, "models", params$model_version)
 
-split_args_file <- file.path(model_dir, "input", "args.json")
-metrics_file <- file.path(model_dir, "output", "metrics.csv")
-pred_file <- file.path(model_dir, "transform", "predictions.csv")
-station_file <- file.path(site_dir, "data", "station.json")
-images_file <- file.path(site_dir, "data", "images.csv")
+station_file <- file.path(dataset_dir, "dataset", "station.json")
+
+split_args_file <- file.path(model_dir, "input", "rank-input.json")
+images_file <- file.path(model_dir, "input", "images.csv")
+annotations_file <- file.path(model_dir, "input", "annotations.csv")
+
 train_args_file <- file.path(model_dir, "output", "args.json")
-train_file <- file.path(model_dir, "input", "pairs-train.csv")
-val_file <- file.path(model_dir, "input", "pairs-val.csv")
-test_file <- file.path(model_dir, "input", "pairs-test.csv")
+metrics_file <- file.path(model_dir, "output", "metrics.csv")
+
+pred_file <- file.path(model_dir, "transform", "predictions.csv")
+pairs_file <- file.path(model_dir, "input", "pairs.csv")
 
 split_labels <- c(
   "train" = "Train",
   "val" = "Val",
-  "test" = "Test",
-  "na" = "Not Annotated"
+  "test-in" = "Test (In)",
+  "test-out" = "Test (Out)",
+  "test-total" = "Test (All)"
 )
 ```
 
 ```{r load}
 stn <- jsonlite::read_json(station_file)
 split_args <- jsonlite::read_json(split_args_file)
-if (split_args$method == "oracle") {
+if (split_args$pairs$source == "oracle") {
   split_args$num_val_pairs <- split_args$num_eval_pairs
   split_args$num_test_pairs <- split_args$num_eval_pairs
   split_args$notes <- "N/A"
 }
 train_args <- jsonlite::read_json(train_args_file)
-
 metrics <- read_csv(metrics_file, show_col_types = FALSE)
-
-images <- read_csv(images_file, show_col_types = FALSE)
-
-pairs_train <- read_csv(train_file, show_col_types = FALSE)
-pairs_val <- read_csv(val_file, show_col_types = FALSE)
-pairs_test <- read_csv(test_file, show_col_types = FALSE)
-
-pairs <- bind_rows(
-  train = pairs_train,
-  val = pairs_val,
-  test = pairs_test,
-  .id = "split"
-)
-pairs <- bind_rows(
-  `1` = select(pairs, split, image_id = image_id_1, timestamp = timestamp_1, label = label_1),
-  `2` = select(pairs, split, image_id = image_id_2, timestamp = timestamp_2, label = label_2),
-  .id = "i"
-)
-splits <- pairs %>% 
-  select(timestamp, split) %>% 
-  distinct()
+annotations <- read_csv(annotations_file, show_col_types = FALSE)
+images <- read_csv(images_file, show_col_types = FALSE) %>% 
+  mutate(
+    timestamp = with_tz(timestamp, tzone = "US/Eastern"),
+    date = as_date(timestamp),
+    split = factor(split, levels = names(split_labels))
+  )
+pairs <- read_csv(pairs_file, show_col_types = FALSE)
 
 pred <- read_csv(pred_file, show_col_types = FALSE) %>%
   mutate(
     timestamp = with_tz(timestamp, tzone = "US/Eastern"),
     date = as_date(timestamp),
     hour = hour(timestamp),
-    rank_obs = rank(flow_cfs, na.last = "keep") / n(),
+    rank_obs = rank(value, na.last = "keep") / n(),
     rank_pred = rank(score) / n(),
     rank_resid = (rank_obs - rank_pred)
   ) %>% 
-  left_join(
-    splits, by = "timestamp"
-  ) %>% 
   mutate(
-    split = coalesce(split, "na"),
-    split = factor(split, levels = c("train", "val", "test", "na"))
+    split = factor(split, levels = names(split_labels))
   )
+
 pred <- pred %>% 
   complete(date = seq.Date(min(pred$date), max(pred$date), by = "1 day")) %>%
   mutate(
-    timestamp = coalesce(timestamp, as.POSIXct(date))
+    timestamp = coalesce(timestamp, as.POSIXct(date)),
+    log_value = log10(value),
+    z_obs = (log_value - mean(log_value, na.rm = TRUE)) / sd(log_value, na.rm = TRUE),
+    z_pred = (score - mean(score, na.rm = TRUE)) / sd(score, na.rm = TRUE)
   )
 
 pred_day <- pred %>%
   filter(!is.na(score)) %>% 
-  group_by(date) %>%
+  group_by(split, date) %>%
   summarise(
-    flow_cfs = mean(flow_cfs),
+    value = mean(value),
     score = mean(score),
     .groups = "drop"
   ) %>%
   mutate(
-    rank_obs = rank(flow_cfs, na.last = "keep") / n(),
+    rank_obs = rank(value, na.last = "keep") / n(),
     rank_pred = rank(score) / n()
-  ) %>% 
-  left_join(
-    pred %>%
-      select(date, split) %>%
-      filter(!is.na(split), split != "na") %>%
-      distinct(),
-    by = "date"
-  ) %>% 
-  complete(date = seq.Date(min(pred$date), max(pred$date), by = "1 day")) %>% 
-  mutate(split = factor(coalesce(split, "na"), levels = levels(pred$split)))
-
-if (any(!is.na(pred$flow_cfs))) {
+  )
+  
+if (any(!is.na(pred$value))) {
   safe_cor <- possibly(cor, otherwise = NA_real_)
   tau <- pred %>% 
     bind_rows(
       pred %>% 
+        filter(split %in% c("test-in", "test-out")) %>% 
+        transmute(
+          split = "test-total",
+          value,
+          score
+        ),
+      pred %>% 
         transmute(
           split = "total",
-          flow_cfs,
+          value,
           score
         )
     ) %>% 
@@ -142,7 +136,7 @@ if (any(!is.na(pred$flow_cfs))) {
     group_by(split) %>% 
     summarise(
       n = sum(!is.na(score)),
-      tau = safe_cor(flow_cfs, score, method = "kendall", use = "complete.obs")
+      tau = safe_cor(value, score, method = "kendall", use = "complete.obs")
     ) %>%
     select(split, tau) %>% 
     deframe()
@@ -150,9 +144,16 @@ if (any(!is.na(pred$flow_cfs))) {
   tau_day <- pred_day %>% 
     bind_rows(
       pred_day %>% 
+        filter(split %in% c("test-in", "test-out")) %>% 
+        transmute(
+          split = "test-total",
+          value,
+          score
+        ),
+      pred_day %>% 
         transmute(
           split = "total",
-          flow_cfs,
+          value,
           score
         )
     ) %>% 
@@ -160,7 +161,7 @@ if (any(!is.na(pred$flow_cfs))) {
     group_by(split) %>% 
     summarise(
       n = sum(!is.na(score)),
-      tau = safe_cor(flow_cfs, score, method = "kendall", use = "complete.obs")
+      tau = safe_cor(value, score, method = "kendall", use = "complete.obs")
     ) %>%
     select(split, tau) %>% 
     deframe()
@@ -185,42 +186,171 @@ if (any(!is.na(pred$flow_cfs))) {
     total = NA_real_
   )
 }
-
 ```
 
 ```txt
-Report Generated: `r Sys.time()`
+Created:         `r Sys.time()`
 
-Station:   `r stn$name`
-Model ID:  `r params$model_id`
-Folder:    `r model_dir`
+Station:         `r stn$name`
+Variable:        `r params$variable`
+Dataset:         `r params$dataset_version`
+Model:           `r params$model_version`
 
-Dataset:
-  Start:    `r min(pred$timestamp)`
-  End:      `r max(pred$timestamp)`
-  # Images: `r scales::comma(nrow(pred))`
+Images:
+  Start:         `r min(pred$timestamp)`
+  End:           `r max(pred$timestamp)`
+  # Images:      `r scales::comma(nrow(pred))`
 
 Annotations:
-  Method:        `r split_args$method`
-  Margin:        `r if_else(split_args$method == "oracle", paste0(split_args$margin, " (", split_args$margin_mode, ")"), "N/A")`
-  # Train Pairs: `r split_args$num_train_pairs`
-  # Val Pairs:   `r split_args$num_val_pairs`
-  # Test Pairs:  `r split_args$num_test_pairs`
+  Source:        `r split_args$pairs$source`
+  # Train Pairs: `r split_args$pairs$splits$train`
+  # Val Pairs:   `r split_args$pairs$splits$val`
+  Period:        `r as_date(split_args$pairs$start)` to `r as_date(split_args$pairs$end)`
   Notes:         `r split_args$notes`
 
-Training Params:
+Training:
   # Epochs:      `r train_args$epochs`
   Learn Rate:    `r train_args$lr`
 
 Performance (Kendall Tau):      
   Train:         `r sprintf("%.2f", tau["train"])`
   Val:           `r sprintf("%.2f", tau["val"])`
-  Test:          `r sprintf("%.2f", tau["test"])`
-  Not Annotated: `r sprintf("%.2f", tau["na"])`
+  Test (In):     `r sprintf("%.2f", tau["test-in"])`
+  Test (Out):    `r sprintf("%.2f", tau["test-out"])`
+  Test (All):    `r sprintf("%.2f", tau["test-total"])`
   Overall:       `r sprintf("%.2f", tau["total"])`
 ```
 
-## Training Loss
+## Input Data
+
+### Images
+
+```{r images-ts, fig.width=10, fig.height=6}
+p_value <- images %>%
+  ggplot(aes(timestamp, log10(value))) +
+  geom_line() +
+  geom_point(aes(color = split), size = 0.5, alpha = 0.5) +
+  scale_x_datetime(date_labels = "%b %Y", date_breaks = "2 months", expand = expansion()) +
+  scale_color_brewer("Split", palette = "Set1", labels = split_labels) +
+  guides(
+    color = guide_legend(override.aes = list(size = 4, alpha = 1))
+  ) +
+  labs(x = NULL, y = "Obs log10(Flow [cfs])") +
+  theme_bw() +
+  theme(
+    axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)
+  )
+
+p_splits <- images %>% 
+  mutate(
+    group = if_else(split %in% c("train", "val"), "train", "test"),
+    group = factor(group, levels = c("train", "test"))
+  ) %>%
+  ggplot(aes(timestamp)) +
+  geom_rug(aes(color = split), length = unit(100, "mm")) +
+  scale_x_datetime(
+    date_labels = "%b %Y", date_breaks = "2 months", expand = expansion(),
+    limits = range(images$timestamp)
+  ) +
+  scale_color_brewer("Split", palette = "Set1", drop = FALSE, labels = split_labels, guide = "none") +
+  facet_wrap(vars(group), ncol = 1, strip.position = "left", labeller = labeller(group = c(
+    "train" = "Annotated",
+    "test" = "Unannotated"
+  ))) +
+  labs(x = NULL) +
+  theme_bw() +
+  theme(
+    strip.placement = "outside",
+    strip.background = element_blank(),
+    axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)
+  )
+
+wrap_plots(p_value, p_splits, ncol = 1, heights = c(0.6, 0.4)) +
+  plot_layout(guides = "collect") +
+  plot_annotation(title = "Timeseries of Obs. Flow and Image Splits")
+```
+
+
+```{r images-hist, fig.width=10, fig.height=6}
+images %>%
+  ggplot(aes(value)) +
+  geom_histogram(aes(fill = split)) +
+  scale_fill_brewer("Split", palette = "Set1", labels = split_labels) +
+  scale_x_log10() +
+  facet_wrap(vars(split), labeller = labeller(split = split_labels)) +
+  guides(
+    color = guide_legend(override.aes = list(size = 4, alpha = 1))
+  ) +
+  labs(
+    x = "log10(Flow [cfs])",
+    y = "# Images",
+    title = "Obs. Flow Distributions by Image Split"
+  ) +
+  theme_bw()
+```
+
+```{r images-cumul, fig.width=10, fig.height=4}
+images %>%
+  ggplot(aes(value)) +
+  stat_ecdf(aes(color = split)) +
+  scale_x_log10() +
+  scale_color_brewer("Split", palette = "Set1", labels = split_labels) +
+  scale_y_continuous(breaks = scales::pretty_breaks(n = 8), labels = scales::percent, expand = expansion()) +
+  guides(
+    color = guide_legend(override.aes = list(size = 4, alpha = 1))
+  ) +
+  labs(
+    x = "log10(Flow [cfs])",
+    y = "Cumul. Frequency (%)",
+    title = "Cumulative Frequency Distribution of Obs. Flow by Image Split"
+  ) +
+  theme_bw()
+```
+
+
+### Annotations
+
+```{r annotation_timestamp, fig.width=10, fig.height=5}
+p1 <- annotations %>% 
+  ggplot(aes(right.timestamp, left.timestamp)) +
+  geom_point(aes(color = rank), alpha = 0.25) +
+  scale_color_brewer(palette = "Set1") +
+  scale_x_datetime(date_breaks = "2 months", date_labels = "%b %Y") +
+  scale_y_datetime(date_breaks = "2 months", date_labels = "%b %Y") +
+  labs(
+    x = "Right: Timestamp",
+    y = "Left: Timestamp",
+    title = "Annotation Pairs by Timestamp"
+  ) +
+  theme_bw() +
+  theme(
+    axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5),
+    aspect.ratio = 1
+  )
+p2 <- annotations %>% 
+  ggplot(aes(pmax(right.value, 0.1), pmax(left.value, 0.1))) +
+  geom_point(aes(color = rank), alpha = 0.25) +
+  scale_color_brewer(palette = "Set1") +
+  scale_x_log10() +
+  scale_y_log10() +
+  labs(
+    x = "Right: log10[Obs. Flow (cfs)]",
+    y = "Left: log10[Obs. Flow (cfs)]",
+    title = "Annotation Pairs by Obs. Flow"
+  ) +
+  theme_bw() +
+  theme(
+    axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5),
+    aspect.ratio = 1
+  )
+(p1 | p2) +
+  plot_layout(guides = "collect")
+```
+
+
+## Model Training
+
+### Loss Function
 
 ```{r train_loss, fig.width=8, fig.height=4}
 metrics %>% 
@@ -253,130 +383,67 @@ metrics %>%
   theme_bw()
 ```
 
+## Model Predictions
 
-## Timeseries
+### Timeseries
 
-```{r ts_value, fig.height=10}
-p_q <- pred %>%
-  # transmute(timestamp, `log(flow_cfs)` = log10(flow_cfs), score) %>%
-  # pivot_longer(-timestamp) %>%
-  ggplot(aes(timestamp, log10(flow_cfs))) +
+```{r ts_value, fig.height=12, fig.width=10}
+p_value <- pred %>%
+  ggplot(aes(timestamp, value)) +
   geom_line() +
-  # geom_point(
-  #   data = pairs %>% 
-  #     mutate(
-  #       flow = log10(label),
-  #       name = "log(flow_cfs)",
-  #       split = factor(split, levels = levels(pred$split))
-  #     ),
-  #   aes(y = flow, color = split),
-  #   size = 0.5
-  # ) +
   scale_x_datetime(date_labels = "%b %Y", date_breaks = "2 months", expand = expansion()) +
-  # facet_wrap(vars(name), scales = "free_y", ncol = 1, strip.position = "left", labeller = labeller(
-  #   name = c("log(flow_cfs)" = "Obs log10(Flow [cfs])", "score" = "Pred Score")
-  # )) +
-  labs(x = "Date", y = "Obs log10(Flow [cfs])") +
-  # scale_color_brewer("Split", palette = "Set1") +
-  labs(
-    # x = "Date",
-    # title = "Timeseries of Observed Flow and Predicted Scores"
-  ) +
-  # guides(color = guide_legend(override.aes = list(size = 1))) +
+  scale_y_log10() +
+  labs(x = NULL, y = "Observed\nlog10(Flow [cfs])") +
   theme_bw() +
   theme(
-    # strip.placement = "outside",
-    # strip.background = element_blank(),
-    # strip.text = element_text(size = 12)
+    axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)
   )
-
-p_s <- pred %>%
-  # transmute(timestamp, `log(flow_cfs)` = log10(flow_cfs), score) %>%
-  # pivot_longer(-timestamp) %>%
+p_score <- pred %>%
   ggplot(aes(timestamp, score)) +
   geom_line() +
-  # geom_point(
-  #   data = pairs %>% 
-  #     mutate(
-  #       flow = log10(label),
-  #       name = "log(flow_cfs)",
-  #       split = factor(split, levels = levels(pred$split))
-  #     ),
-  #   aes(y = flow, color = split),
-  #   size = 0.5
-  # ) +
   scale_x_datetime(date_labels = "%b %Y", date_breaks = "2 months", expand = expansion()) +
-  # facet_wrap(vars(name), scales = "free_y", ncol = 1, strip.position = "left", labeller = labeller(
-  #   name = c("log(flow_cfs)" = "Obs log10(Flow [cfs])", "score" = "Pred Score")
-  # )) +
-  labs(x = "Date", y = "Pred Score") +
-  # scale_color_brewer("Split", palette = "Set1") +
-  labs(
-    # x = "Date",
-    # title = "Timeseries of Observed Flow and Predicted Scores"
-  ) +
-  # guides(color = guide_legend(override.aes = list(size = 1))) +
+  labs(x = NULL, y = "Predicted\n Image Score") +
   theme_bw() +
   theme(
-    # strip.placement = "outside",
-    # strip.background = element_blank(),
-    # strip.text = element_text(size = 12)
+    axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)
   )
-p_splits <- pred %>% 
-  filter(!is.na(split), split != "na") %>% 
-  ggplot(aes(timestamp)) +
-  geom_rug(aes(color = split), length = unit(100, "mm")) +
-  scale_x_datetime(
-    date_labels = "%b %Y", date_breaks = "2 months", expand = expansion(),
-    limits = range(pred$timestamp)
-  ) +
-  scale_color_brewer("Split", palette = "Set1", drop = FALSE, labels = split_labels) +
-  labs(x = NULL, y = "Annotated\nImages") +
-  theme_bw()
-p_na <- pred %>% 
-  filter(!is.na(split), split == "na") %>% 
-  ggplot(aes(timestamp)) +
-  geom_rug(aes(color = split), length = unit(100, "mm")) +
-  scale_x_datetime(
-    date_labels = "%b %Y", date_breaks = "2 months", expand = expansion(),
-    limits = range(pred$timestamp)
-  ) +
-  scale_color_brewer("Split", palette = "Set1", drop = FALSE, labels = split_labels) +
-  labs(x = NULL, y = "Unannotated\nImages") +
-  theme_bw()
-
-wrap_plots(p_q, p_splits, p_na, p_s, ncol = 1, heights = c(0.3, 0.05, 0.05, 0.3)) +
-  plot_layout(guides = "collect") +
-  plot_annotation(title = "Timeseries of Observed Flow, Photo Timestamps, and Predicted Scores")
-```
-
-```{r ts_rank, fig.height=4}
-pred %>%
+p_rank <- pred %>%
   filter(!is.na(split)) %>% 
   ggplot(aes(timestamp)) +
-  geom_line(aes(y = rank_pred, linetype = "Predicted"), color = "black") +
-  geom_point(aes(y = rank_obs, color = split), size = 1, alpha = 0.5) +
-  scale_color_brewer("Split", palette = "Set1", labels = split_labels) +
+  geom_line(aes(y = rank_obs)) +
+  geom_point(aes(y = rank_pred, color = split), size = 0.5, alpha = 0.5) +
   scale_x_datetime(date_labels = "%b %Y", date_breaks = "2 months", expand = expansion()) +
-  scale_y_continuous(breaks = scales::pretty_breaks(n = 8), labels = scales::percent_format(accuracy = 1), expand = expansion()) +
-  guides(
-    color = guide_legend(override.aes = list(size = 1, alpha = 1))
-  ) +
-  labs(
-    x = "Date",
-    y = "Percentile Rank",
-    linetype = NULL,
-    title = "Timeseries of Observed and Predicted Ranks",
-  ) +
-  theme_bw()
+  scale_y_continuous(labels = scales::percent, breaks = scales::pretty_breaks(n = 8), limits = c(0, 1), expand = expansion()) +
+  scale_color_brewer("Split", palette = "Set1", labels = split_labels) +
+  labs(x = NULL, y = "Rank\nPercentile", linetype = NULL) +
+  theme_bw() +
+  theme(
+    axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)
+  )
+p_z <- pred %>%
+  filter(!is.na(split)) %>% 
+  ggplot(aes(timestamp)) +
+  geom_line(aes(y = z_obs)) +
+  geom_point(aes(y = z_pred, color = split), size = 0.5, alpha = 0.5) +
+  scale_x_datetime(date_labels = "%b %Y", date_breaks = "2 months", expand = expansion()) +
+  scale_color_brewer("Split", palette = "Set1", labels = split_labels) +
+  labs(x = NULL, y = "Z Score", linetype = NULL) +
+  theme_bw() +
+  theme(
+    axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)
+  )
+
+wrap_plots(p_value, p_score, p_rank, p_z, ncol = 1) +
+  plot_layout(guides = "collect") +
+  plot_annotation(title = "Timeseries of Observed Flow, Predited Scores, Percentile Ranks, and Z Scores")
 ```
 
-## Scatter Plots
+### Scatter Plots
 
 ```{r splot, fig.height=12}
-p1 <- pred %>%
+p_value <- pred %>%
   filter(!is.na(split)) %>% 
-  ggplot(aes(flow_cfs, score)) +
+  ggplot(aes(value, score)) +
   geom_point(aes(color = split), size = 0.5, alpha = 0.5) +
   geom_smooth(method = "lm", se = FALSE, formula = y ~ x, color = "black") +
   scale_color_brewer("Split", palette = "Set1", labels = split_labels) +
@@ -384,13 +451,16 @@ p1 <- pred %>%
   labs(
     x = "Obs Flow (cfs)",
     y = "Predicted Score",
-    title = "Observed Flow vs Predicted Score"
+    title = "Obs Flow vs Pred Score"
   ) +
   guides(color = guide_legend(override.aes = list(size = 1))) +
   facet_wrap(vars(split), ncol = 1, labeller = labeller(split = split_labels)) +
   theme_bw() +
-  theme(aspect.ratio = 1)
-p2 <- pred %>%
+  theme(
+    axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5),
+    aspect.ratio = 1
+  )
+p_rank <- pred %>%
   filter(!is.na(split)) %>% 
   ggplot(aes(rank_obs, rank_pred)) +
   geom_point(aes(color = split), size = 0.5, alpha = 0.5) +
@@ -401,21 +471,42 @@ p2 <- pred %>%
   labs(
     x = "Observed Rank",
     y = "Predicted Rank",
-    title = "Observed vs. Predicted Ranks"
+    title = "Obs vs. Pred Ranks"
   ) +
   guides(color = guide_legend(override.aes = list(size = 1))) +
   facet_wrap(vars(split), ncol = 1, labeller = labeller(split = split_labels)) +
   theme_bw() +
-  theme(aspect.ratio = 1)
-if (any(!is.na(pred$flow_cfs))) {
-  wrap_plots(p1, p2, nrow = 1) +
+  theme(
+    axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5),
+    aspect.ratio = 1
+  )
+p_z <- pred %>%
+  filter(!is.na(split)) %>% 
+  ggplot(aes(z_obs, z_pred)) +
+  geom_point(aes(color = split), size = 0.5, alpha = 0.5) +
+  geom_abline(color = "black", linewidth = 1) +
+  scale_color_brewer("Split", palette = "Set1", labels = split_labels) +
+  labs(
+    x = "Observed Z Score",
+    y = "Predicted Z Score",
+    title = "Obs vs. Pred Z Scores"
+  ) +
+  guides(color = guide_legend(override.aes = list(size = 1))) +
+  facet_wrap(vars(split), ncol = 1, labeller = labeller(split = split_labels)) +
+  theme_bw() +
+  theme(
+    axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5),
+    aspect.ratio = 1
+  )
+if (any(!is.na(pred$value))) {
+  wrap_plots(p_value, p_rank, p_z, nrow = 1) +
     plot_layout(guides = "collect")
 } else {
   print("No obs.")
 }
 ```
 
-## Residuals
+### Residuals
 
 ```{r resid_ts}
 pred %>%
@@ -433,7 +524,8 @@ pred %>%
     y = "Percentile Rank Residual (Obs-Pred)",
     title = "Timeseries of Percentile Rank Residuals (Obs - Pred)"
   ) +
-  theme_bw()
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5))
 ```
 
 ```{r resid_splot, fig.height = 12}
@@ -491,7 +583,7 @@ p3 <- pred %>%
   ) +
   theme_bw() +
   theme(aspect.ratio = 1)
-if (any(!is.na(pred$flow_cfs))) {
+if (any(!is.na(pred$value))) {
   wrap_plots(p1, p2, p3, nrow = 1) +
     plot_layout(guides = "collect")
 } else {
@@ -500,7 +592,7 @@ if (any(!is.na(pred$flow_cfs))) {
 ```
 
 
-## Daily Aggregation
+### Daily Aggregation
 
 Note: excludes nighttime images and observed flows
 
@@ -508,15 +600,17 @@ Note: excludes nighttime images and observed flows
 Performance (Kendall Tau):      
   Train:         `r sprintf("%.2f", tau_day["train"])`
   Val:           `r sprintf("%.2f", tau_day["val"])`
-  Test:          `r sprintf("%.2f", tau_day["test"])`
-  Not Annotated: `r sprintf("%.2f", tau_day["na"])`
+  Test (In):     `r sprintf("%.2f", tau_day["test-in"])`
+  Test (Out):    `r sprintf("%.2f", tau_day["test-out"])`
+  Test (All):    `r sprintf("%.2f", tau_day["test-total"])`
   Overall:       `r sprintf("%.2f", tau_day["total"])`
 ```
 
 ```{r day_ts, fig.height=4}
 pred_day %>%
+  complete(date = seq.Date(min(date), max(date), 1)) %>%
   ggplot(aes(date)) +
-  geom_step(aes(y = rank_pred, linetype = "Predicted"), color = "black") +
+  geom_line(aes(y = rank_pred, linetype = "Predicted"), color = "black") +
   geom_point(aes(y = rank_obs, color = split), size = 1) +
   scale_color_brewer("Split", palette = "Set1", labels = split_labels) +
   scale_x_date(date_labels = "%b %Y", date_breaks = "2 months", expand = expansion()) +
@@ -546,5 +640,8 @@ pred_day %>%
   ) +
   facet_wrap(vars(split), nrow = 1, labeller = labeller(split = split_labels)) +
   theme_bw() +
-  theme(aspect.ratio = 1)
+  theme(
+    axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5),
+    aspect.ratio = 1
+  )
 ```

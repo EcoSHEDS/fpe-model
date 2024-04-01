@@ -146,6 +146,22 @@ annotations %>%
   theme_bw()
 ggsave("notes/20240328/annotations-values.png", width = 12, height = 8, scale = 2)
 
+annotations %>%
+  filter(!is.na(left.value), !is.na(right.value)) %>%
+  ggplot(aes(pmax(left.value, 1), pmax(right.value, 1))) +
+  geom_point(aes(color = rank), alpha = 0.5) +
+  scale_x_log10() +
+  scale_y_log10() +
+  scale_color_brewer(palette = "Set1") +
+  facet_grid(vars(rank), vars(station_id, station_name)) +
+  labs(
+    title = "Annotation Values",
+    subtitle = subtitle
+  ) +
+  theme_bw() +
+  theme(aspect.ratio = 1)
+ggsave("notes/20240328/annotations-values-rank.png", width = 14, height = 6, scale = 2)
+
 images <- x %>%
   select(images) %>%
   unnest(images) %>%
@@ -176,10 +192,10 @@ images_classes <- images %>%
   mutate(
     class = case_when(
       image_id %in% c(annotations_train$left.imageId, annotations_train$right.imageId) ~ "Annotated",
-      as_date(timestamp) <= cutoff_date ~ "Unannotated",
-      TRUE ~ "Test"
+      as_date(timestamp) <= cutoff_date ~ "Test (In)",
+      TRUE ~ "Test (Out)"
     ),
-    class = factor(class, levels = c("Annotated", "Unannotated", "Test"))
+    class = factor(class, levels = c("Annotated", "Test (In)", "Test (Out)"))
   )
 
 images_classes %>%
