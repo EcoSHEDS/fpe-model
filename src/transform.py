@@ -88,25 +88,22 @@ def transform(args):
         for idx, image in tqdm(enumerate(ds), total=len(ds)):
             pred = predict_fn(image[0], model)
             df.at[idx, "score"] = pred["score"]
-    
+
     return df
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
 
-    # parser.add_argument("--hosts", type=str, default=ast.literal_eval(os.environ["SM_HOSTS"]))
-    # parser.add_argument("--current-host", type=str, default=os.environ["SM_CURRENT_HOST"])
     parser.add_argument("--model-dir", type=str, default=os.environ["SM_MODEL_DIR"])
-    # parser.add_argument("--checkpoint-dir", type=str, default="/opt/ml/checkpoints")
     parser.add_argument("--output-dir", type=str, default=os.environ["SM_OUTPUT_DIR"])
     parser.add_argument("--images-dir", type=str, default=os.environ["SM_CHANNEL_IMAGES"])
     parser.add_argument("--values-dir", type=str, default=os.environ["SM_CHANNEL_VALUES"])
     parser.add_argument(
         "--data-file",
         type=str,
-        default="flow-images.csv",
-        help="filename of CSV file with linked images and flows",
+        default="images.csv",
+        help="filename of images CSV file",
     )
 
     args = parser.parse_args()

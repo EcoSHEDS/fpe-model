@@ -356,3 +356,15 @@ def parse_configargparse_args(params_file):
     for key, val in parsed_values.items():
         parsed_values[key] = types[key](val)
     return parsed_values
+
+
+def timestamp():
+    return time.strftime("%Y%m%d-%H%M%S")
+
+def get_batch_creds(session, role_arn):
+    sts = session.client("sts")
+    response = sts.assume_role(
+        RoleArn=role_arn,
+        RoleSessionName=f"fpe-sagemaker-session--{timestamp()}"
+    )
+    return response['Credentials']
