@@ -12,6 +12,7 @@ suppressPackageStartupMessages({
   library(logger)
   library(glue)
   library(optparse)
+  library(igraph)
 })
 
 default_end <- format(today(tz = "US/Eastern"), "%Y-%m-%d")
@@ -118,8 +119,6 @@ images_dates <- ymd(c(args$options$images_start, args$options$images_end))
 annotations_dates <- ymd(c(args$options$annotations_start, args$options$annotations_end))
 overwrite <- args$options$overwrite
 
-config <- config::get()
-
 stopifnot(dir.exists(output_dir))
 
 # fetch: station ----------------------------------------------------------
@@ -193,14 +192,51 @@ split_pairs <- function (x, train_frac = 0.8, seed = NULL) {
     set.seed(seed)
   }
 
+  graph <- graph_from_data_frame(pairs[, c("image_id_1", "image_id_2")], directed = FALSE)
+  comp <- components(graph)
+  membership <- comp$membership
+
+  # Determine the number of pairs in each component
+  component_sizes <- table(membership)
+  total_pairs <- nrow(pairs)
+  accumulated_percentage <- 0
+  training_components <- c()
+
+  image_clusters <- as_tibble(membership, rownames = "image_id") %>%
+    rename(cluster = value)
+  clusters <- image_clusters |>
+    arrange(cluster) |>
+    count(cluster) |>
+    slice_sample(prop = 1) |>
+    mutate(
+      cumul_n = cumsum(n),
+      cumul_p = cumul_n / sum(n)
+    )
+
+  train_clusters <- clusters %>%
+    filter(cumul_p <= train_frac) %>%
+    pull(cluster)
+  val_clusters <- clusters %>%
+    filter(!cluster %in% train_clusters) %>%
+    pull(cluster)
+
+  train_images <- image_clusters %>%
+    filter(cluster %in% train_clusters) %>%
+    pull(image_id) |>
+    as.numeric()
+  val_images <- image_clusters %>%
+    filter(cluster %in% val_clusters) %>%
+    pull(image_id) |>
+    as.numeric()
+
   pairs_train <- pairs %>%
-    slice_sample(prop = train_frac)
+    filter(image_id_1 %in% train_images & image_id_2 %in% train_images)
   pairs_val <- pairs %>%
-    filter(!pair %in% pairs_train$pair)
+    filter(image_id_1 %in% val_images & image_id_2 %in% val_images)
 
   bind_rows(
-    train = duplicate_pairs(pairs_train),
-    val = duplicate_pairs(pairs_val),
+    train = pairs_train,
+    val = pairs_val,
     .id = "split"
   )
 }
@@ -263,12 +299,21 @@ log_info("annotations: n={scales::comma(nrow(annotations))} ({scales::percent(nr
 
 pairs <- split_pairs(annotations, train_frac, seed)
 
-n_pairs_train <- sum(pairs$split == "train") / 2
-n_pairs_val <- sum(pairs$split == "val") / 2
+n_pairs_train <- sum(pairs$split == "train")
+n_pairs_val <- sum(pairs$split == "val")
 n_pairs_total <- n_pairs_train + n_pairs_val
 log_info("pairs(train): n={scales::comma(n_pairs_train)} ({scales::percent(n_pairs_train/n_pairs_total, accuracy = 1)})")
 log_info("pairs(val): n={scales::comma(n_pairs_val)} ({scales::percent(n_pairs_val/n_pairs_total, accuracy = 1)})")
 
+# ensure no data leakage
+pairs_train <- pairs %>%
+  filter(split == "train")
+train_image_ids <- c(pairs_train$image_id_1, pairs_train$image_id_2)
+pairs_val <- pairs %>%
+  filter(split == "val")
+val_image_ids <- c(pairs_val$image_id_1, pairs_val$image_id_2)
+
+stopifnot(length(intersect(train_image_ids, val_image_ids)) == 0)
 
 # export ------------------------------------------------------------------
 
@@ -490,7 +535,7 @@ list(
   ),
   pairs = list(
     source = "human",
-    n = nrow(pairs) / 2,
+    n = nrow(pairs),
     start = format_ISO8601(
       min(c(pairs$timestamp_1, pairs$timestamp_2)),
       usetz = TRUE
@@ -500,8 +545,8 @@ list(
       usetz = TRUE
     ),
     splits = list(
-      train = sum(pairs$split == "train") / 2,
-      val = sum(pairs$split == "val") / 2
+      train = sum(pairs$split == "train"),
+      val = sum(pairs$split == "val")
     )
   ),
   args = args,
