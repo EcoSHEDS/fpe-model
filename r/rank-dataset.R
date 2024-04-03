@@ -1,6 +1,6 @@
 # export rank dataset for given station and variable
 # usage: Rscript rank-dataset.R --help
-# example: Rscript rank-dataset.R -d D:/fpe/rank -s 29 -v FLOW_CFS -V 20240326 -m 65
+# example: Rscript rank-dataset.R -d /mnt/d/fpe/rank -s 29 -v FLOW_CFS -m 65 RANK-FLOW-20240326
 
 Sys.setenv(TZ = "GMT")
 
@@ -11,10 +11,9 @@ suppressPackageStartupMessages({
   library(logger)
   library(janitor)
   library(glue)
+  library(httr2)
   library(optparse)
 })
-
-default_version <- format(today(tz = "US/Eastern"), "%Y%m%d")
 
 parser <- OptionParser()
 parser <- add_option(
@@ -22,17 +21,12 @@ parser <- add_option(
   help="Path to root directory"
 )
 parser <- add_option(
-  parser, c("-s", "--station"), type="integer",
+  parser, c("-s", "--station-id"), type="integer",
   help="Station ID from database"
 )
 parser <- add_option(
-  parser, c("-v", "--variable"), type="character",
-  default="FLOW_CFS", help="Variable (default='FLOW_CFS')"
-)
-parser <- add_option(
-  parser, c("-V", "--version"), type="character",
-  default=default_version,
-  help=glue("Dataset version (default='{default_version}')")
+  parser, c("-v", "--variable-id"), type="character",
+  default="FLOW_CFS", help="Variable ID from database (default='FLOW_CFS')"
 )
 parser <- add_option(
   parser, c("-m", "--maxgap"), type="integer", default=65,
@@ -44,32 +38,51 @@ parser <- add_option(
 )
 
 if (interactive()) {
-  args <- parse_args(parser, args = c(
-    "--directory=D:/fpe/rank",
-    "--station=11",
-    "--variable=FLOW_CFS",
-    "--version=20240327",
-    "--overwrite"
-  ))
+  cmd_args <- c(
+    "--directory=/mnt/d/fpe/rank",
+    "--station-id=10",
+    "--variable-id=FLOW_CFS",
+    "--overwrite",
+    "RANK-FLOW-20240327"
+  )
 } else {
-  args <- parse_args(parser, args = commandArgs(trailingOnly = TRUE))
+  cmd_args <- commandArgs(trailingOnly = TRUE)
 }
 
-station_id <- args$station
-variable_id <- args$variable
-output_dir <- args$directory
-dataset_version <- args$version
-overwrite <- args$overwrite
+args <- parse_args(
+  parser,
+  positional_arguments = 1,
+  convert_hyphens_to_underscores = TRUE,
+  args = cmd_args
+)
 
-MAXGAP <- args$maxgap
+dataset_code <- args$args[1]
+station_id <- args$options$station_id
+variable_id <- args$options$variable_id
+output_dir <- args$options$directory
+overwrite <- args$options$overwrite
+MAXGAP <- args$options$maxgap
 
+log_info("dataset_code: {dataset_code}")
 log_info("station_id: {station_id}")
 log_info("variable_id: {variable_id}")
 log_info("output_dir: {output_dir}")
-log_info("dataset_version: {dataset_version}")
 
 # dir.create(output_dir, showWarnings = FALSE, recursive = TRUE)
 stopifnot(dir.exists(output_dir))
+
+dataset_dir <- file.path(output_dir, station_id, "datasets", dataset_code)
+if (!dir.exists(dataset_dir)) {
+  log_info("dataset_dir: {dataset_dir} (created)")
+  dir.create(dataset_dir, showWarnings = FALSE, recursive = TRUE)
+} else {
+  if (overwrite) {
+    log_warn("dataset_dir: {dataset_dir} (already exists, overwriting)")
+  } else {
+    log_error("dataset_dir: {dataset_dir} (already exists, use flag --overwrite to replace it)")
+    stop("Dataset directory already exists")
+  }
+}
 
 config <- config::get()
 
@@ -161,44 +174,29 @@ find_max_dtime <- function(x, timestamps) {
 log_info("fetching: station")
 station <- fetch_station(con, station_id)
 stopifnot(nrow(station) == 1)
-
 log_info("station: {station$name[[1]]}")
 
-dataset_dir <- file.path(output_dir, station$name[[1]], variable_id, dataset_version)
-if (!dir.exists(dataset_dir)) {
-  log_info("dataset_dir: {dataset_dir} (created)")
-  dir.create(dataset_dir, showWarnings = FALSE, recursive = TRUE)
-} else {
-  if (overwrite) {
-    log_warn("dataset_dir: {dataset_dir} (already exists, overwriting)")
-  } else {
-    log_error("dataset_dir: {dataset_dir} (already exists, use flag --overwrite to replace it)")
-    stop("Dataset directory already exists")
-  }
-}
-
-data_dir <- file.path(dataset_dir, "dataset")
-dir.create(data_dir, showWarnings = FALSE, recursive = TRUE)
-
-log_info("saving: {file.path(data_dir, 'station.json')}")
+log_info("saving: {file.path(dataset_dir, 'station.json')}")
 station %>%
   select(-metadata) %>%
   mutate(across(c(waterbody_type, status), as.character)) %>%
   as.list() %>%
-  write_json(file.path(data_dir, "station.json"), auto_unbox = TRUE)
+  write_json(file.path(dataset_dir, "station.json"), auto_unbox = TRUE)
 
 log_info("fetching: images")
 images <- fetch_station_images(con, station_id)
 
-log_info("fetching: values")
 value_source <- if_else(!is.na(na_if(station$nwis_id, "")) && variable_id == "FLOW_CFS", "NWIS", "FPE")
 if (value_source == "NWIS") {
+  log_info("fetching: values [NWIS]")
   start_timestamp <- min(images$timestamp)
   end_timestamp <- max(images$timestamp)
   values <- fetch_station_flows_from_nwis(station, start_timestamp, end_timestamp)
 } else {
+  log_info("fetching: values [FPE]")
   values <- fetch_station_values_from_fpe(con, station_id, variable_id)
 }
+log_info("values: {nrow(values)} rows")
 
 
 # images -------------------------------------------------------------
@@ -220,7 +218,7 @@ if (nrow(obs_values) > 0) {
   interp_values <- approxfun(obs_values$timestamp, y = obs_values$value, na.rm = FALSE)
   value_timestamps <- sort(unique(obs_values$timestamp))
 
-  log_info("estimating value for each image")
+  log_info("interpolating values by image")
   images_values <- images %>%
     mutate(
       filename = map_chr(url, ~ httr::parse_url(.)$path),
@@ -247,8 +245,8 @@ if (nrow(obs_values) > 0) {
     labs(
       title = glue("{station$name[[1]]} (ID={station_id}) | {variable_id}")
     )
-  log_info("saving: {file.path(data_dir, 'images.png')}")
-  ggsave(file.path(data_dir, "images.png"), p, width = 8, height = 4)
+  log_info("saving: {file.path(dataset_dir, 'images.png')}")
+  ggsave(file.path(dataset_dir, "images.png"), p, width = 8, height = 4)
 } else {
   images_values <- images %>%
     mutate(
@@ -266,19 +264,19 @@ if (nrow(obs_values) > 0) {
       y = "value",
       title = glue("{station$name[[1]]} (ID={station_id}) | {variable_id}")
     )
-  log_info("saving: {file.path(data_dir, 'images.png')}")
-  ggsave(file.path(data_dir, "images.png"), p, width = 8, height = 4)
+  log_info("saving: {file.path(dataset_dir, 'images.png')}")
+  ggsave(file.path(dataset_dir, "images.png"), p, width = 8, height = 4)
 }
 
-log_info("saving: {file.path(data_dir, 'images.csv')}")
+log_info("saving: {file.path(dataset_dir, 'images.csv')}")
 images_values %>%
   select(-interp_value, -max_dtime) %>%
-  write_csv(file.path(data_dir, "images.csv"), na = "")
+  write_csv(file.path(dataset_dir, "images.csv"), na = "")
 
 if (nrow(values) > 0) {
-  log_info("saving: {file.path(data_dir, 'values.csv')}")
+  log_info("saving: {file.path(dataset_dir, 'values.csv')}")
   values %>%
-    write_csv(file.path(data_dir, "values.csv"), na = "")
+    write_csv(file.path(dataset_dir, "values.csv"), na = "")
 
   p <- values %>%
     ggplot(aes(timestamp, value)) +
@@ -287,8 +285,8 @@ if (nrow(values) > 0) {
       y = "value",
       title = glue("{station$name[[1]]} (ID={station_id}) | {variable_id}")
     )
-  log_info("saving: {file.path(data_dir, 'values.png')}")
-  ggsave(file.path(data_dir, "values.png"), p, width = 8, height = 4)
+  log_info("saving: {file.path(dataset_dir, 'values.png')}")
+  ggsave(file.path(dataset_dir, "values.png"), p, width = 8, height = 4)
 }
 
 # annotations -------------------------------------------------------------
@@ -309,17 +307,22 @@ annotations_db <- tbl(con, "annotations") %>%
 log_info("fetching: annotations from s3")
 annotations_raw <- annotations_db %>%
   filter(!is.na(url)) %>%
-  rowwise() %>%
   mutate(
-    data = list({
-      url %>%
-        read_json(simplifyVector = TRUE, flatten = TRUE) %>%
+    data = map(url, function (url) {
+      resp <- request(url) %>%
+        req_retry(max_tries = 3) %>%
+        req_perform()
+
+      resp %>%
+        resp_body_string() %>%
+        fromJSON(simplifyVector = TRUE, flatten = TRUE) %>%
         as_tibble() %>%
         mutate(pair_id = row_number())
-    })
+    }, .progress = TRUE)
   )
 
 annotations <- annotations_raw %>%
+  rowwise() %>%
   mutate(
     data = list({
       data %>%
@@ -379,8 +382,8 @@ if (nrow(annotations) > 0) {
       title = glue("{station$name[[1]]} (ID={station_id}) | {variable_id}")
     ) +
     theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5))
-  log_info("saving: {file.path(data_dir, 'annotations-splot.png')}")
-  ggsave(file.path(data_dir, "annotations-splot.png"), p, width = 8, height = 6)
+  log_info("saving: {file.path(dataset_dir, 'annotations-splot.png')}")
+  ggsave(file.path(dataset_dir, "annotations-splot.png"), p, width = 8, height = 6)
 
   p <- tibble(timestamp = c(annotations$left.timestamp, annotations$right.timestamp)) %>%
     arrange(timestamp) %>%
@@ -393,73 +396,67 @@ if (nrow(annotations) > 0) {
       title = glue("{station$name[[1]]} (ID={station_id}) | {variable_id}")
     ) +
     theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5))
-  log_info("saving: {file.path(data_dir, 'annotations-cumul.png')}")
-  ggsave(file.path(data_dir, "annotations-cumul.png"), p, width = 8, height = 4)
+  log_info("saving: {file.path(dataset_dir, 'annotations-cumul.png')}")
+  ggsave(file.path(dataset_dir, "annotations-cumul.png"), p, width = 8, height = 4)
 }
 
-log_info("saving: {file.path(data_dir, 'annotations.csv')}")
+log_info("saving: {file.path(dataset_dir, 'annotations.csv')}")
 annotations %>%
-  write_csv(file.path(data_dir, "annotations.csv"), na = "")
+  write_csv(file.path(dataset_dir, "annotations.csv"), na = "")
 
 
 # log -----------------------------------------------------------------
 
 if (nrow(images) > 0) {
-  images_log <- glue("
-images:
-  count:  {scales::comma(nrow(images_values))} ({scales::comma(nrow(filter(images_values, !is.na(value))))} with values)
-  start:  {format(min(images$timestamp), usetz = TRUE)}
-  end:    {format(max(images$timestamp), usetz = TRUE)}
-")
+  out_images <- list(
+    count = nrow(images),
+    count_missing_value = sum(is.na(images_values$value)),
+    start = format(with_tz(min(images$timestamp), tzone = station$timezone), usetz = TRUE),
+    end = format(with_tz(max(images$timestamp), tzone = station$timezone), usetz = TRUE)
+  )
 } else {
-  images_log <- glue("
-images:
-  count:  0
-")
+  out_images <- list(count = 0)
 }
 
 if (nrow(values) > 0) {
-  values_log <- glue("
-values:
-  source: {value_source}
-  count:  {scales::comma(nrow(values))}
-  start:  {format(min(values$timestamp), usetz = TRUE)}
-  end:    {format(max(values$timestamp), usetz = TRUE)}
-  freq:   {median(as.numeric(difftime(sort(unique(values$timestamp)), lag(sort(unique(values$timestamp))), units = 'mins')), na.rm = TRUE)} min (median)
-  maxgap: {MAXGAP} min
-")
+  median_freq <- median(as.numeric(difftime(
+    sort(unique(values$timestamp)),
+    lag(sort(unique(values$timestamp))),
+    units = 'mins'
+  )), na.rm = TRUE)
+  out_values <- list(
+    source = value_source,
+    count = nrow(values),
+    start = format(with_tz(min(values$timestamp), tzone = station$timezone), usetz = TRUE),
+    end = format(with_tz(max(values$timestamp), tzone = station$timezone), usetz = TRUE),
+    freq = median_freq
+  )
 } else {
-  values_log <- glue("
-values:
-  source: {value_source}
-  count:  {scales::comma(nrow(values))}
-")
+  out_values = list(
+    count = 0
+  )
 }
 
 if (nrow(annotations) > 0) {
-  annotations_log <- glue("
-annotations:
-  count:  {scales::comma(nrow(annotations))}
-  start:  {format(min(c(annotations$left.timestamp, annotations$right.timestamp)), usetz = TRUE)}
-  end:    {format(max(c(annotations$left.timestamp, annotations$right.timestamp)), usetz = TRUE)}
-")
+  out_annotations <- list(
+    count = nrow(annotations),
+    start = format(with_tz(min(c(annotations$left.timestamp, annotations$right.timestamp)), tzone = station$timezone), usetz = TRUE),
+    end = format(with_tz(max(c(annotations$left.timestamp, annotations$right.timestamp)), tzone = station$timezone), usetz = TRUE)
+  )
 } else {
-  annotations_log <- glue("
-annotations:
-  count:  0
-")
+  out_annotations <- list(count = 0)
 }
 
-glue("
-dataset:
-  created: {now()}
-  station: {station_id} ('{station$name[[1]]}')
-  variable: {variable_id}
-  version: {dataset_version}
-{images_log}
-{values_log}
-{annotations_log}
-") %>%
-  write_file(file.path(data_dir, "rank-dataset.log"))
+list(
+  dataset_code = dataset_code,
+  station_id = station_id,
+  variable_id = variable_id,
+  images = out_images,
+  values = out_values,
+  annotations = out_annotations,
+  args = args,
+  created = format(now(tz = "US/Eastern"), usetz = TRUE)
+) %>%
+  write_json(file.path(dataset_dir, "rank-dataset.json"), pretty = TRUE, auto_unbox = TRUE)
 
 DBI::dbDisconnect(con)
