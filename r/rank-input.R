@@ -257,10 +257,10 @@ duplicate_pairs <- function (x) {
 
 # load data ---------------------------------------------------------------
 
-log_info("loading: station.json")
+log_info("station: loading")
 station <- read_json(file.path(dataset_dir, "station.json"))
 
-log_info("loading: images.csv")
+log_info("images: loading")
 images_total <- read_csv(file.path(dataset_dir, "images.csv"), show_col_types = FALSE) %>%
   mutate(
     timestamp = with_tz(timestamp, tzone = station$timezone)
@@ -276,7 +276,7 @@ images <- images_total %>%
   )
 log_info("images: n={scales::comma(nrow(images))} ({scales::percent(nrow(images)/nrow(images_total), accuracy = 1)} of {scales::comma(nrow(images_total))} total)")
 
-log_info("loading: annotations.csv")
+log_info("annotations: loading")
 annotations_total <- read_csv(file.path(dataset_dir, "annotations.csv"), col_types = cols(comment = "c"), show_col_types = FALSE) %>%
   mutate(
     across(
@@ -297,6 +297,7 @@ annotations <- annotations_total %>%
   )
 log_info("annotations: n={scales::comma(nrow(annotations))} ({scales::percent(nrow(annotations)/nrow(annotations_total), accuracy = 1)} of {scales::comma(nrow(annotations_total))} total)")
 
+log_info("annotations: splitting")
 pairs <- split_pairs(annotations, train_frac, seed)
 
 n_pairs_train <- sum(pairs$split == "train")
@@ -514,6 +515,8 @@ manifest_json <- str_replace(
 )
 write_file(manifest_json, file.path(input_dir, "manifest.json"))
 
+file.copy(file.path(dataset_dir, "station.json"), file.path(input_dir, "station.json"))
+
 list(
   model_code = model_code,
   dataset_code = dataset_code,
@@ -553,4 +556,3 @@ list(
   created_at = format_ISO8601(now(tz="US/Eastern"), usetz = TRUE)
 ) %>%
   write_json(file.path(input_dir, "rank-input.json"), auto_unbox = TRUE, pretty = TRUE)
-

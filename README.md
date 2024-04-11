@@ -125,11 +125,28 @@ Rscript rank-input.R </path/to/datasets> 29 FLOW_CFS 20240326 20240328
 
 ## Model Training
 
-See `rank-train.ipynb`
+```sh
+python src/run-train.py --station-id 68 --directory=/mnt/d/fpe/rank --model-code RANK-FLOW-20240410
+```
 
 ## Model Inference
 
-See `rank-inference.ipynb`
+```sh
+# run training job
+python src/run-transform.py --station-id 68 --directory=/mnt/d/fpe/rank --model-code RANK-FLOW-20240410
+# wait for transform job to complete
+python src/run-transform-merge.py --station-id 68 --directory=/mnt/d/fpe/rank --model-code RANK-FLOW-20240410
+# wait for merge to complete (fpe-prod-lambda-models)
+python src/run-transform-predictions.py --station-id 68 --directory=/mnt/d/fpe/rank --model-code RANK-FLOW-20240410
+```
+
+## Deploy
+
+Copy diagnostics report and predictions CSV to S3.
+
+```sh
+./batch-deploy.sh /mnt/d/fpe/rank/stations-wb-model-uuid.txt /mnt/d/fpe/rank RANK-FLOW-20240410
+```
 
 ## License
 

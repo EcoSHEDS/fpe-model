@@ -1,34 +1,101 @@
-generate_report <- function (site, model_id, root_dir = "D:/fpe/sites") {
-  output_file <- paste0("./qmd/rank-", site, "-", model_id, ".html")
+generate_report <- function (station_id, model_code, directory = "/mnt/d/fpe/rank") {
+  cat("generating report:", station_id, "\n")
 
   quarto::quarto_render(
-    input = "qmd/rank-predictions.qmd",
+    input = "qmd/rank-report.qmd",
     output_format = "html",
     execute_params = list(
-      root_dir = root_dir,
-      site = site,
-      model_id = model_id
+      directory = directory,
+      station_id = station_id,
+      model_code = model_code
     ),
     debug = TRUE
   )
   target_filename <- file.path(
-    root_dir, site, "models", model_id,
-    paste0("rank-", site, "-", model_id, ".html")
+    directory, station_id, "models", model_code,
+    paste0(model_code, ".html")
   )
-  file.copy("qmd/rank-predictions.html", target_filename, overwrite = TRUE)
+  file.copy("qmd/rank-report.html", target_filename, overwrite = TRUE)
   print(paste0("Report saved: ", target_filename))
 }
 
-generate_report("WESTB0", "20230922")
+generate_report(9, "RANK-FLOW-20240410")
+
+station_ids <- read_csv("/mnt/d/fpe/rank/stations-wb.txt", col_names = "station_id")$station_id
+walk(station_ids, \(x) generate_report(x, "RANK-FLOW-20240410"))
 
 # all runs in csv file
-runs <- read_csv("D:/fpe/sites/model-runs.csv")
+runs <- read_csv("/mnt/d/fpe/rank/model-runs.csv")
 
 for (i in 1:nrow(runs)) {
-  print(glue("{runs$site[[i]]}/{runs$model[[i]]} ({i}/{nrow(runs)})"))
-  generate_report(runs$site[[i]], runs$model[[i]])
+  print(glue("{runs$station_id[[i]]}/{runs$model_code[[i]]} ({i}/{nrow(runs)})"))
+  generate_report(runs$station_id[[i]], runs$model_code[[i]])
 }
 
+
+# WESTB0: 20240402, 20240403 ----------------------------------------------
+
+x <- bind_rows(
+  `RANK-FLOW-20240402` = read_csv("/mnt/d/fpe/rank/29/models/RANK-FLOW-20240402/transform/predictions.csv"),
+  `RANK-FLOW-20240403` = read_csv("/mnt/d/fpe/rank/29/models/RANK-FLOW-20240403/transform/predictions.csv"),
+  .id = "model_code"
+) %>%
+  filter(!is.na(value), !is.na(score)) %>%
+  group_by(model_code) %>%
+  mutate(
+    score_z = scale(score),
+    rank_obs = rank(value) / n(),
+    rank_pred = rank(score) / n()
+  ) %>%
+  ungroup()
+
+x %>%
+  select(model_code, image_id, timestamp, score) %>%
+  pivot_wider(names_from = "model_code", values_from = "score") %>%
+  ggplot(aes(`RANK-FLOW-20240402`, `RANK-FLOW-20240403`)) +
+  geom_abline() +
+  geom_point(size = 0.2, color = "orangered")
+
+x %>%
+  select(model_code, image_id, timestamp, rank_pred) %>%
+  pivot_wider(names_from = "model_code", values_from = "rank_pred") %>%
+  ggplot(aes(`RANK-FLOW-20240402`, `RANK-FLOW-20240403`)) +
+  geom_abline() +
+  geom_point(size = 0.2, color = "orangered")
+
+# consistent shift in score
+x %>%
+  ggplot(aes(timestamp, score)) +
+  geom_line(aes(color = model_code)) +
+  scale_color_brewer(palette = "Set1")
+
+x %>%
+  ggplot(aes(score)) +
+  stat_ecdf(aes(color = model_code)) +
+  scale_color_brewer(palette = "Set1")
+
+# standardized values
+x %>%
+  ggplot(aes(timestamp, score_z)) +
+  geom_line(aes(color = model_code)) +
+  scale_color_brewer(palette = "Set1")
+
+x %>%
+  select(model_code, image_id, timestamp, score_z) %>%
+  pivot_wider(names_from = "model_code", values_from = "score_z") %>%
+  ggplot(aes(`RANK-FLOW-20240402`, `RANK-FLOW-20240403`)) +
+  geom_abline() +
+  geom_point(size = 0.2, color = "orangered")
+
+x %>%
+  ggplot(aes(rank_obs, rank_pred)) +
+  geom_point(aes(color = model_code), size = 0.2) +
+  scale_color_brewer(palette = "Set1")
+
+x %>%
+  ggplot(aes(rank_obs, rank_pred)) +
+  geom_point(aes(color = model_code), size = 0.2) +
+  scale_color_brewer(palette = "Set1")
 
 # WESTB0: 20230920, 20230921, 20230922 annotation quality --------------------
 # 20230920: all annotations

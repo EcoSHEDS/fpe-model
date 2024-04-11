@@ -7,11 +7,9 @@ format:
     page-layout: full
     self-contained: true
 params:
-  root_dir: "/mnt/d/fpe/rank"
-  site: "West Brook 0_01171100"
-  variable: "FLOW_CFS"
-  dataset_version: "20240327"
-  model_version: "20240328"
+  directory: "/mnt/d/fpe/rank"
+  station_id: 29
+  model_code: "RANK-FLOW-20240403"
 editor_options: 
   chunk_output_type: console
 ---
@@ -28,27 +26,24 @@ suppressPackageStartupMessages({
 knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE, fig.width = 12)
 
 # params <- list(
-#   root_dir = "/mnt/d/fpe/rank",
-#   site = "West Brook 0_01171100",
-#   variable = "FLOW_CFS",
-#   dataset_version = "20240327",
-#   model_version = "20240328"
+#   directory = "/mnt/d/fpe/rank",
+#   station_id = 29,
+#   model_code = "RANK-FLOW-20240403"
 # )
 
-site_dir <- file.path(params$root_dir, params$site)
-dataset_dir <- file.path(site_dir, params$variable, params$dataset_version)
-model_dir <- file.path(dataset_dir, "models", params$model_version)
+station_dir <- file.path(params$directory, params$station_id)
+model_dir <- file.path(station_dir, "models", params$model_code)
 
-station_file <- file.path(dataset_dir, "dataset", "station.json")
+station_file <- file.path(model_dir, "input", "station.json")
+rank_input_file <- file.path(model_dir, "input", "rank-input.json")
 
-split_args_file <- file.path(model_dir, "input", "rank-input.json")
 images_file <- file.path(model_dir, "input", "images.csv")
 annotations_file <- file.path(model_dir, "input", "annotations.csv")
 
 train_args_file <- file.path(model_dir, "output", "args.json")
 metrics_file <- file.path(model_dir, "output", "metrics.csv")
 
-pred_file <- file.path(model_dir, "transform", "predictions.csv")
+predictions_file <- file.path(model_dir, "transform", "predictions.csv")
 pairs_file <- file.path(model_dir, "input", "pairs.csv")
 
 split_labels <- c(
@@ -61,13 +56,8 @@ split_labels <- c(
 ```
 
 ```{r load}
-stn <- jsonlite::read_json(station_file)
-split_args <- jsonlite::read_json(split_args_file)
-if (split_args$pairs$source == "oracle") {
-  split_args$num_val_pairs <- split_args$num_eval_pairs
-  split_args$num_test_pairs <- split_args$num_eval_pairs
-  split_args$notes <- "N/A"
-}
+station <- jsonlite::read_json(station_file)
+rank_input <- jsonlite::read_json(rank_input_file)
 train_args <- jsonlite::read_json(train_args_file)
 metrics <- read_csv(metrics_file, show_col_types = FALSE)
 annotations <- read_csv(annotations_file, show_col_types = FALSE)
@@ -79,29 +69,48 @@ images <- read_csv(images_file, show_col_types = FALSE) %>%
   )
 pairs <- read_csv(pairs_file, show_col_types = FALSE)
 
-pred <- read_csv(pred_file, show_col_types = FALSE) %>%
+predictions <- read_csv(predictions_file, show_col_types = FALSE) %>%
   mutate(
     timestamp = with_tz(timestamp, tzone = "US/Eastern"),
     date = as_date(timestamp),
     hour = hour(timestamp),
-    rank_obs = rank(value, na.last = "keep") / n(),
-    rank_pred = rank(score) / n(),
-    rank_resid = (rank_obs - rank_pred)
+    has_rank = !is.na(value) & !is.na(score),
+    log_value = log10(value)
+    # rank_obs = rank(value, na.last = "keep") / n(),
+    # rank_pred = rank(score) / n(),
+    # rank_resid = (rank_obs - rank_pred)
   ) %>% 
   mutate(
     split = factor(split, levels = names(split_labels))
   )
+n_ranks <- sum(predictions$has_rank)
+predictions$rank_obs <- NA_real_
+predictions$rank_pred <- NA_real_
+predictions$rank_resid <- NA_real_
+predictions$z_obs <- NA_real_
+predictions$z_pred <- NA_real_
+if (n_ranks > 0) {
+  predictions$rank_obs[predictions$has_rank] <- (rank(predictions$value[predictions$has_rank]) - 1) / (n_ranks - 1)
+  predictions$rank_pred[predictions$has_rank] <- (rank(predictions$score[predictions$has_rank]) - 1) / (n_ranks - 1)
+  predictions$rank_resid = predictions$rank_obs - predictions$rank_pred
+  
+  mean_obs <- mean(predictions$log_value[predictions$has_rank])
+  sd_obs <- sd(predictions$log_value[predictions$has_rank])
+  mean_pred <- mean(predictions$score[predictions$has_rank])
+  sd_pred <- sd(predictions$score[predictions$has_rank])
+  predictions$z_obs[predictions$has_rank] <- (predictions$log_value[predictions$has_rank] - mean_obs) / sd_obs
+  predictions$z_pred[predictions$has_rank] <- (predictions$score[predictions$has_rank] - mean_pred) / sd_pred
+}
 
-pred <- pred %>% 
-  complete(date = seq.Date(min(pred$date), max(pred$date), by = "1 day")) %>%
+# TODO: continue fixing dataset to have consisten values and scores
+
+predictions <- predictions %>% 
+  complete(date = seq.Date(min(predictions$date), max(predictions$date), by = "1 day")) %>%
   mutate(
-    timestamp = coalesce(timestamp, as.POSIXct(date)),
-    log_value = log10(value),
-    z_obs = (log_value - mean(log_value, na.rm = TRUE)) / sd(log_value, na.rm = TRUE),
-    z_pred = (score - mean(score, na.rm = TRUE)) / sd(score, na.rm = TRUE)
+    timestamp = coalesce(timestamp, as.POSIXct(date))
   )
 
-pred_day <- pred %>%
+predictions_day <- predictions %>%
   filter(!is.na(score)) %>% 
   group_by(split, date) %>%
   summarise(
@@ -114,18 +123,18 @@ pred_day <- pred %>%
     rank_pred = rank(score) / n()
   )
   
-if (any(!is.na(pred$value))) {
+if (any(!is.na(predictions$value))) {
   safe_cor <- possibly(cor, otherwise = NA_real_)
-  tau <- pred %>% 
+  tau <- predictions %>% 
     bind_rows(
-      pred %>% 
+      predictions %>% 
         filter(split %in% c("test-in", "test-out")) %>% 
         transmute(
           split = "test-total",
           value,
           score
         ),
-      pred %>% 
+      predictions %>% 
         transmute(
           split = "total",
           value,
@@ -141,16 +150,16 @@ if (any(!is.na(pred$value))) {
     select(split, tau) %>% 
     deframe()
   
-  tau_day <- pred_day %>% 
+  tau_day <- predictions_day %>% 
     bind_rows(
-      pred_day %>% 
+      predictions_day %>% 
         filter(split %in% c("test-in", "test-out")) %>% 
         transmute(
           split = "test-total",
           value,
           score
         ),
-      pred_day %>% 
+      predictions_day %>% 
         transmute(
           split = "total",
           value,
@@ -166,23 +175,25 @@ if (any(!is.na(pred$value))) {
     select(split, tau) %>% 
     deframe()
 } else {
-  pred$rank_obs <- NA_real_
-  pred$rank_resid <- NA_real_
-  pred_day$rank_obs <- NA_real_
-  pred_day$rank_resid <- NA_real_
+  predictions$rank_obs <- NA_real_
+  predictions$rank_resid <- NA_real_
+  predictions_day$rank_obs <- NA_real_
+  predictions_day$rank_resid <- NA_real_
 
   tau <- list(
     train = NA_real_,
     val = NA_real_,
-    test = NA_real_,
-    na = NA_real_,
+    `test-in` = NA_real_,
+    `test-out` = NA_real_,
+    `test-total` = NA_real_,
     total = NA_real_
   )
   tau_day <- list(
     train = NA_real_,
     val = NA_real_,
-    test = NA_real_,
-    na = NA_real_,
+    `test-in` = NA_real_,
+    `test-out` = NA_real_,
+    `test-total` = NA_real_,
     total = NA_real_
   )
 }
@@ -191,22 +202,20 @@ if (any(!is.na(pred$value))) {
 ```txt
 Created:         `r Sys.time()`
 
-Station:         `r stn$name`
-Variable:        `r params$variable`
-Dataset:         `r params$dataset_version`
-Model:           `r params$model_version`
+Station:         `r station$name` (id=`r station$id`)
+Model:           `r params$model_code`
 
 Images:
-  Start:         `r min(pred$timestamp)`
-  End:           `r max(pred$timestamp)`
-  # Images:      `r scales::comma(nrow(pred))`
+  Start:         `r min(predictions$timestamp)`
+  End:           `r max(predictions$timestamp)`
+  # Images:      `r scales::comma(nrow(predictions))`
 
 Annotations:
-  Source:        `r split_args$pairs$source`
-  # Train Pairs: `r split_args$pairs$splits$train`
-  # Val Pairs:   `r split_args$pairs$splits$val`
-  Period:        `r as_date(split_args$pairs$start)` to `r as_date(split_args$pairs$end)`
-  Notes:         `r split_args$notes`
+  Source:        `r rank_input$pairs$source`
+  # Train Pairs: `r rank_input$pairs$splits$train`
+  # Val Pairs:   `r rank_input$pairs$splits$val`
+  Period:        `r as_date(rank_input$pairs$start)` to `r as_date(rank_input$pairs$end)`
+  Notes:         `r rank_input$notes`
 
 Training:
   # Epochs:      `r train_args$epochs`
@@ -388,7 +397,7 @@ metrics %>%
 ### Timeseries
 
 ```{r ts_value, fig.height=12, fig.width=10}
-p_value <- pred %>%
+p_value <- predictions %>%
   ggplot(aes(timestamp, value)) +
   geom_line() +
   scale_x_datetime(date_labels = "%b %Y", date_breaks = "2 months", expand = expansion()) +
@@ -398,7 +407,7 @@ p_value <- pred %>%
   theme(
     axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)
   )
-p_score <- pred %>%
+p_score <- predictions %>%
   ggplot(aes(timestamp, score)) +
   geom_line() +
   scale_x_datetime(date_labels = "%b %Y", date_breaks = "2 months", expand = expansion()) +
@@ -407,7 +416,7 @@ p_score <- pred %>%
   theme(
     axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)
   )
-p_rank <- pred %>%
+p_rank <- predictions %>%
   filter(!is.na(split)) %>% 
   ggplot(aes(timestamp)) +
   geom_line(aes(y = rank_obs)) +
@@ -420,7 +429,7 @@ p_rank <- pred %>%
   theme(
     axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)
   )
-p_z <- pred %>%
+p_z <- predictions %>%
   filter(!is.na(split)) %>% 
   ggplot(aes(timestamp)) +
   geom_line(aes(y = z_obs)) +
@@ -441,7 +450,7 @@ wrap_plots(p_value, p_score, p_rank, p_z, ncol = 1) +
 ### Scatter Plots
 
 ```{r splot, fig.height=12}
-p_value <- pred %>%
+p_value <- predictions %>%
   filter(!is.na(split)) %>% 
   ggplot(aes(value, score)) +
   geom_point(aes(color = split), size = 0.5, alpha = 0.5) +
@@ -460,7 +469,7 @@ p_value <- pred %>%
     axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5),
     aspect.ratio = 1
   )
-p_rank <- pred %>%
+p_rank <- predictions %>%
   filter(!is.na(split)) %>% 
   ggplot(aes(rank_obs, rank_pred)) +
   geom_point(aes(color = split), size = 0.5, alpha = 0.5) +
@@ -480,7 +489,7 @@ p_rank <- pred %>%
     axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5),
     aspect.ratio = 1
   )
-p_z <- pred %>%
+p_z <- predictions %>%
   filter(!is.na(split)) %>% 
   ggplot(aes(z_obs, z_pred)) +
   geom_point(aes(color = split), size = 0.5, alpha = 0.5) +
@@ -498,18 +507,18 @@ p_z <- pred %>%
     axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5),
     aspect.ratio = 1
   )
-if (any(!is.na(pred$value))) {
+if (any(!is.na(predictions$value))) {
   wrap_plots(p_value, p_rank, p_z, nrow = 1) +
     plot_layout(guides = "collect")
 } else {
-  print("No obs.")
+  print("No observed data")
 }
 ```
 
 ### Residuals
 
 ```{r resid_ts}
-pred %>%
+predictions %>%
   filter(!is.na(split)) %>% 
   ggplot(aes(timestamp, rank_resid)) +
   geom_hline(yintercept = 0) +
@@ -529,7 +538,7 @@ pred %>%
 ```
 
 ```{r resid_splot, fig.height = 12}
-p1 <- pred %>%
+p1 <- predictions %>%
   filter(!is.na(split)) %>% 
   ggplot(aes(rank_pred, rank_resid)) +
   geom_hline(yintercept = 0) +
@@ -548,7 +557,7 @@ p1 <- pred %>%
   theme_bw() +
   theme(aspect.ratio = 1)
 
-p2 <- pred %>%
+p2 <- predictions %>%
   filter(!is.na(rank_resid)) %>% 
   ggplot(aes(hour(timestamp), rank_resid)) +
   geom_hline(yintercept = 0) +
@@ -566,7 +575,7 @@ p2 <- pred %>%
   theme_bw() +
   theme(aspect.ratio = 1)
 
-p3 <- pred %>%
+p3 <- predictions %>%
   filter(!is.na(rank_resid)) %>% 
   ggplot(aes(ymd(20001231) + days(yday(timestamp)), rank_resid)) +
   geom_hline(yintercept = 0) +
@@ -583,18 +592,18 @@ p3 <- pred %>%
   ) +
   theme_bw() +
   theme(aspect.ratio = 1)
-if (any(!is.na(pred$value))) {
+if (any(!is.na(predictions$value))) {
   wrap_plots(p1, p2, p3, nrow = 1) +
     plot_layout(guides = "collect")
 } else {
-  print("No obs.")
+  print("No observed data.")
 }
 ```
 
 
 ### Daily Aggregation
 
-Note: excludes nighttime images and observed flows
+Note: Daily mean values computed using only daytime images (7AM-7PM)
 
 ```text
 Performance (Kendall Tau):      
@@ -607,7 +616,7 @@ Performance (Kendall Tau):
 ```
 
 ```{r day_ts, fig.height=4}
-pred_day %>%
+predictions_day %>%
   complete(date = seq.Date(min(date), max(date), 1)) %>%
   ggplot(aes(date)) +
   geom_line(aes(y = rank_pred, linetype = "Predicted"), color = "black") +
@@ -621,12 +630,15 @@ pred_day %>%
     linetype = NULL,
     title = "Daily Timeseries of Observed and Predicted Ranks"
   ) +
-  theme_bw()
+  theme_bw() +
+  theme(
+    axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)
+  )
 ```
 
 
 ```{r day_splot, fig.height=4}
-pred_day %>%
+predictions_day %>%
   ggplot(aes(rank_obs, rank_pred)) +
   geom_point(aes(color = split), size = 1, alpha = 0.5) +
   geom_abline(color = "black") +
