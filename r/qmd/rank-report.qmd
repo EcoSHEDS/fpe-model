@@ -28,7 +28,7 @@ knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE, fig.width 
 # params <- list(
 #   directory = "/mnt/d/fpe/rank",
 #   station_id = 29,
-#   model_code = "RANK-FLOW-20240403"
+#   model_code = "RANK-FLOW-20240410"
 # )
 
 station_dir <- file.path(params$directory, params$station_id)
@@ -102,8 +102,6 @@ if (n_ranks > 0) {
   predictions$z_pred[predictions$has_rank] <- (predictions$score[predictions$has_rank] - mean_pred) / sd_pred
 }
 
-# TODO: continue fixing dataset to have consisten values and scores
-
 predictions <- predictions %>% 
   complete(date = seq.Date(min(predictions$date), max(predictions$date), by = "1 day")) %>%
   mutate(
@@ -111,7 +109,7 @@ predictions <- predictions %>%
   )
 
 predictions_day <- predictions %>%
-  filter(!is.na(score)) %>% 
+  filter(!is.na(score), !is.na(value)) %>% 
   group_by(split, date) %>%
   summarise(
     value = mean(value),
@@ -119,7 +117,7 @@ predictions_day <- predictions %>%
     .groups = "drop"
   ) %>%
   mutate(
-    rank_obs = rank(value, na.last = "keep") / n(),
+    rank_obs = rank(value) / n(),
     rank_pred = rank(score) / n()
   )
   
