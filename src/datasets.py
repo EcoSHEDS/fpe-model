@@ -97,8 +97,8 @@ class FlowPhotoDataset(Dataset):
             image = read_image(image_path)
             image = image / 255.0  # convert to float in [0,1]
             return image
-        except:
-            print(f"Could not read image index {index} ({image_path})")
+        except Exception as e:
+            print(f"Could not read image index {index} ({image_path}). Error: {e}")
 
     def __getitem__(self, index) -> Tuple:
         image = self.get_image(index)

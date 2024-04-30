@@ -1,6 +1,6 @@
 import os
-import sys
 import pickle
+import sys
 from argparse import Namespace
 
 import configargparse
@@ -9,14 +9,14 @@ import torch
 import torch.nn
 import torch.utils.data
 from torchvision.transforms import (
-    Resize,
-    RandomCrop,
     CenterCrop,
+    ColorJitter,
+    Compose,
+    Normalize,
+    RandomCrop,
     RandomHorizontalFlip,
     RandomRotation,
-    ColorJitter,
-    Normalize,
-    Compose,
+    Resize,
 )
 from tqdm import tqdm
 
@@ -24,10 +24,11 @@ from tqdm import tqdm
 
 PROJECT_ROOT = os.path.abspath(os.path.join(sys.path[0], os.pardir))
 sys.path.append(PROJECT_ROOT)
-# from src.arguments import add_data_args, add_ranking_data_args
-from src.utils import parse_configargparse_args, next_path, log, load_data
 from src.datasets import FlowPhotoDataset
 from src.modules import ResNetRankNet
+
+# from src.arguments import add_data_args, add_ranking_data_args
+from src.utils import load_data, log, next_path, parse_configargparse_args
 
 
 def get_args():
@@ -71,8 +72,9 @@ def get_args():
     if "gpu" in args:
         del training_args["gpu"]
     # update param names from training params file
-    training_args["train_data_file"] = training_args["data_file"]
-    del training_args["data_file"]
+    if "data_file" in training_args:
+        training_args["train_data_file"] = training_args["data_file"]
+        del training_args["data_file"]
     training_args["train_image_root_dir"] = training_args["image_root_dir"]
     del training_args["image_root_dir"]
     training_args["train_site"] = training_args["site"]
@@ -99,15 +101,17 @@ def create_image_transforms(
     }
 
     # augmentation
-    image_transforms["train"].extend(
-        [
-            RandomCrop(input_shape),
-            RandomHorizontalFlip(),
-            RandomRotation(10),
-            ColorJitter(),
-        ]  # type: ignore
-    ) if augmentation else image_transforms["train"].append(
-        CenterCrop(input_shape)  # type: ignore
+    (
+        image_transforms["train"].extend(
+            [
+                RandomCrop(input_shape),
+                RandomHorizontalFlip(),
+                RandomRotation(10),
+                ColorJitter(),
+            ]  # type: ignore
+        )
+        if augmentation
+        else image_transforms["train"].append(CenterCrop(input_shape))  # type: ignore
     )  # type: ignore
     image_transforms["eval"].append(CenterCrop(input_shape))  # type: ignore
 
@@ -130,7 +134,7 @@ def inference_ranking_model(args):
     )
 
     df = load_data(args.inference_data_file)
-    ds = FlowPhotoDataset(df, args.inference_image_root_dir, col_label=args.col_label)
+    ds = FlowPhotoDataset(df, args.inference_image_root_dir, col_label="value")
     image = ds.get_image(0)
     aspect = image.shape[2] / image.shape[1]
     # set up image transforms

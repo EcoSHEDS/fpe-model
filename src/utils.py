@@ -1,14 +1,16 @@
-import os
 import logging
-import time
+import os
 import random
-import requests
 import shutil
+import time
+
 import numpy as np
 import pandas as pd
+import requests
 import torch
 import torchvision.io
 from tqdm import tqdm
+
 from .losses import MSELoss, RankNetLoss
 
 
@@ -475,15 +477,20 @@ def parse_configargparse_args(params_file):
         if arg.startswith("-"):
             key = arg.lstrip("-").replace("-", "_")
             if i + 1 < len(cmd_line_data) and not cmd_line_data[i + 1].startswith("-"):
+                # Initialize the value as the next argument
                 value = cmd_line_data[i + 1]
-                parsed_values[key] = value
+                # Increment the index to the next argument
                 i += 2
+                # Accumulate cmd_line_data from i to i+k-1 where i+k starts with '-'
+                while i < len(cmd_line_data) and not cmd_line_data[i].startswith("-"):
+                    value += " " + cmd_line_data[i]
+                    i += 1
+                parsed_values[key] = value
             else:
                 parsed_values[key] = True
                 i += 1
         else:
             i += 1
-
     # Process config file and default arguments
     if config_file_start is not None:
         remaining_args = [
@@ -491,6 +498,15 @@ def parse_configargparse_args(params_file):
             for line in lines[config_file_start:]
             if line != lines[defaults_start - 1]
         ]
+        for arg in remaining_args:
+            var_name, *var_val = arg.split()
+            if len(var_val) > 1:
+                raise NotImplementedError(
+                    "Params file parser currently only handles variables with 1 value (not lists)."
+                )
+            parsed_values[var_name[:-1].lstrip("-").replace("-", "_")] = var_val[0]
+    if defaults_start is not None:
+        remaining_args = [line for line in lines[defaults_start:]]
         for arg in remaining_args:
             var_name, *var_val = arg.split()
             if len(var_val) > 1:
@@ -506,6 +522,7 @@ def parse_configargparse_args(params_file):
         "image_root_dir": str,
         "col_timestamp": str,
         "output_root_dir": str,
+        "o": str,
         "min_month": int,
         "max_month": int,
         "min_hour": int,
@@ -526,6 +543,9 @@ def parse_configargparse_args(params_file):
         "random_seed": int,
         "gpu": int,
         "annotations": str,
+        "train_data_file": str,
+        "val_data_file": str,
+        "test_data_file": str,
     }
     for key, val in parsed_values.items():
         parsed_values[key] = types[key](val)

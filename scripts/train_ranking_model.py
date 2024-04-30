@@ -1,8 +1,8 @@
+import json
 import os
+import pickle
 import sys
 import time
-import json
-import pickle
 from functools import reduce
 
 import configargparse
@@ -12,40 +12,40 @@ import torch
 import torch.nn
 import torch.utils.data
 from torchvision.transforms import (
-    Resize,
-    RandomCrop,
     CenterCrop,
+    ColorJitter,
+    Compose,
+    Normalize,
+    RandomCrop,
     RandomHorizontalFlip,
     RandomRotation,
-    ColorJitter,
-    Normalize,
-    Compose,
+    Resize,
 )
 
 PROJECT_ROOT = os.path.abspath(os.path.join(sys.path[0], os.pardir))
 sys.path.append(PROJECT_ROOT)
-from src.arguments import add_data_args, add_ranking_data_args, add_model_training_args
+from src.arguments import add_data_args, add_model_training_args, add_ranking_data_args
+from src.datasets import (
+    DatasetSplitter,
+    FlowPhotoRankingDataset,
+    OracleAnnotator,
+    ProbabilisticAnnotator,
+    RandomStratifiedWindowFlow,
+    discharge_distributed_pairs,
+    random_pairs,
+)
+from src.losses import RankNetLoss
+from src.modules import ResNetRankNet
 from src.utils import (
-    log,
-    next_path,
-    set_seeds,
-    load_data,
     filter_by_hour,
     filter_by_month,
     fit,
+    load_data,
+    log,
+    next_path,
+    set_seeds,
     validate,
 )
-from src.datasets import (
-    DatasetSplitter,
-    RandomStratifiedWindowFlow,
-    FlowPhotoRankingDataset,
-    random_pairs,
-    discharge_distributed_pairs,
-    OracleAnnotator,
-    ProbabilisticAnnotator,
-)
-from src.modules import ResNetRankNet
-from src.losses import RankNetLoss
 
 pair_sampling_fn_map = {
     "random_pairs": random_pairs,
@@ -91,15 +91,17 @@ def create_image_transforms(
     }
 
     # augmentation
-    image_transforms["train"].extend(
-        [
-            RandomCrop(input_shape),
-            RandomHorizontalFlip(),
-            RandomRotation(10),
-            ColorJitter(),
-        ]  # type: ignore
-    ) if augmentation else image_transforms["train"].append(
-        CenterCrop(input_shape)  # type: ignore
+    (
+        image_transforms["train"].extend(
+            [
+                RandomCrop(input_shape),
+                RandomHorizontalFlip(),
+                RandomRotation(10),
+                ColorJitter(),
+            ]  # type: ignore
+        )
+        if augmentation
+        else image_transforms["train"].append(CenterCrop(input_shape))  # type: ignore
     )  # type: ignore
     image_transforms["eval"].append(CenterCrop(input_shape))  # type: ignore
 
@@ -169,10 +171,11 @@ def train_ranking_model(args):
     # # # # # # # # # # # # # # # # # # # # # # # # #
     # CREATE PYTORCH DATASETS AND DATALOADERS
     # # # # # # # # # # # # # # # # # # # # # # # # #
+    map_annotation_to_label = {"LEFT": 1, "SAME": 0, "RIGHT": -1}
     # Create two separate dataframes with same column names
-    df1 = train_df[["filename_1", "left.value"]].copy()
+    df1 = train_df[["left.filename", "left.value"]].copy()
     df1.columns = ["filename", "value"]
-    df2 = train_df[["filename_2", "right.value"]].copy()
+    df2 = train_df[["right.filename", "right.value"]].copy()
     df2.columns = ["filename", "value"]
     # Concatenate the two dataframes
     new_df = pd.concat([df1, df2], axis=0)
@@ -181,9 +184,9 @@ def train_ranking_model(args):
     train_ds = FlowPhotoRankingDataset(new_df, args.image_root_dir, col_label="value")
     train_ds.ranked_image_pairs = [
         (
-            np.where(new_df["filename"] == row["filename_1"])[0][0],
-            np.where(new_df["filename"] == row["filename_2"])[0][0],
-            row["pair_label"],
+            np.where(new_df["filename"] == row["left.filename"])[0][0],
+            np.where(new_df["filename"] == row["right.filename"])[0][0],
+            map_annotation_to_label[row["rank"]],
         )
         for ridx, row in train_df.iterrows()
     ]
@@ -215,9 +218,9 @@ def train_ranking_model(args):
     )
     train_ds.transform = image_transforms["train"]
 
-    df1 = val_df[["filename_1", "left.value"]].copy()
+    df1 = val_df[["left.filename", "left.value"]].copy()
     df1.columns = ["filename", "value"]
-    df2 = val_df[["filename_2", "right.value"]].copy()
+    df2 = val_df[["right.filename", "right.value"]].copy()
     df2.columns = ["filename", "value"]
     # Concatenate the two dataframes
     new_df = pd.concat([df1, df2], axis=0)
@@ -228,9 +231,9 @@ def train_ranking_model(args):
     )
     val_ds.ranked_image_pairs = [
         (
-            np.where(new_df["filename"] == row["filename_1"])[0][0],
-            np.where(new_df["filename"] == row["filename_2"])[0][0],
-            row["pair_label"],
+            np.where(new_df["filename"] == row["left.filename"])[0][0],
+            np.where(new_df["filename"] == row["right.filename"])[0][0],
+            map_annotation_to_label[row["rank"]],
         )
         for ridx, row in val_df.iterrows()
     ]
@@ -238,9 +241,9 @@ def train_ranking_model(args):
         [(pair[1], pair[0], -1 * pair[2]) for pair in val_ds.ranked_image_pairs]
     )
 
-    df1 = test_df[["filename_1", "left.value"]].copy()
+    df1 = test_df[["left.filename", "left.value"]].copy()
     df1.columns = ["filename", "value"]
-    df2 = test_df[["filename_2", "right.value"]].copy()
+    df2 = test_df[["right.filename", "right.value"]].copy()
     df2.columns = ["filename", "value"]
     # Concatenate the two dataframes
     new_df = pd.concat([df1, df2], axis=0)
@@ -253,9 +256,9 @@ def train_ranking_model(args):
     )
     test_ds.ranked_image_pairs = [
         (
-            np.where(new_df["filename"] == row["filename_1"])[0][0],
-            np.where(new_df["filename"] == row["filename_2"])[0][0],
-            row["pair_label"],
+            np.where(new_df["filename"] == row["left.filename"])[0][0],
+            np.where(new_df["filename"] == row["right.filename"])[0][0],
+            map_annotation_to_label[row["rank"]],
         )
         for ridx, row in test_df.iterrows()
     ]
@@ -462,6 +465,7 @@ def train_ranking_model(args):
     # # # # # # # # # # # # # # # # # # # # # # # # #
     # TRAIN
     # # # # # # # # # # # # # # # # # # # # # # # # #
+    best_val_loss = np.inf
     for epoch in range(starting_epoch, args.epochs):
         # train
         start_time = time.time()
@@ -503,6 +507,22 @@ def train_ranking_model(args):
             },
             epoch_checkpoint_save_path,
         )
+        # update the best val loss and save the best model
+        if valset_eval[0] < best_val_loss:
+            best_val_loss = valset_eval[0]
+            best_checkpoint_file = "best_model.ckpt"
+            best_checkpoint_save_path = os.path.join(
+                args.exp_dir, "checkpoints", best_checkpoint_file
+            )
+            torch.save(
+                {
+                    "epoch": epoch,
+                    "model_state_dict": model.state_dict(),
+                    "optimizer_state_dict": optimizer.state_dict(),
+                    "training_loss": avg_loss_training,
+                },
+                best_checkpoint_save_path,
+            )
         metrics_checkpoint_file = "metrics_per_epoch_" + paramstr + ".json"
         metrics_checkpoint_save_path = os.path.join(
             args.exp_dir, metrics_checkpoint_file
