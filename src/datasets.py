@@ -111,11 +111,11 @@ class FPEDataset(Dataset):
             filename_col = self.col_filename
         means = torch.zeros(3)
         stds = torch.zeros(3)
-        sample_size = min(len(self), n)
-        sample_indices = torch.randperm(len(self))[:sample_size].tolist()
+        unique_filenames = self.data[filename_col].unique()
+        sample_size = min(len(unique_filenames), n)
+        sample_indices = torch.randperm(len(unique_filenames))[:sample_size].tolist()
         for i in tqdm(sample_indices):
-            row = self.data.iloc[i]
-            image = self.get_image(row[filename_col])
+            image = self.get_image(unique_filenames[i])
             means += image.mean(dim=[1, 2])
             stds += image.std(dim=[1, 2])
         means /= sample_size
@@ -158,48 +158,51 @@ class FPERankingPairsDataset(FPEDataset):
     A PyTorch Dataset class for handling USGS Flow Photo Explorer (FPE) ranked pair datasets.
 
     This class assumes that the `root` directory contains the following:
-    - A CSV file named `annotations.csv` (or another name if specified) that contains metadata about the image pairs.
+    - A CSV file named `pairs.csv` (or another name if specified) that contains metadata about the image pairs.
       This file should have columns for pair IDs, timestamps, filenames, and labels.
     - A JSON file named `station.json` (or another name if specified) that contains metadata about the station.
-    - A directory of images, with the image filenames matching those in the `annotations.csv` file. The filenames in
-      the `annotations.csv` file should be relative to the `root` directory.
+    - A directory of images, with the image filenames matching those in the `pairs.csv` file. The filenames in
+      the `pairs.csv` file should be relative to the `root` directory.
     """
 
     def __init__(
         self,
         root: str,
-        data_file: str = "annotations.csv",
+        data_file: str = "pairs.csv",
         station_file: str = "station.json",
-        col_left_timestamp: str = "left.timestamp",
-        col_right_timestamp: str = "right.timestamp",
-        col_left_filename: str = "left.filename",
-        col_right_filename: str = "right.filename",
+        col_timestamp_1: str = "timestamp_1",
+        col_timestamp_2: str = "timestamp_2",
+        col_filename_1: str = "filename_1",
+        col_filename_2: str = "filename_2",
+        col_value_1: str = "value_1",
+        col_value_2: str = "value_2",
         col_label: str = "rank",
-        col_ground_truth: str = "true_rank",
         transform: Optional[Callable] = None,
         label_transform: Optional[Callable] = None,
     ) -> None:
         """
         Args:
             root (str): Root directory where images are downloaded to.
-            data_file (str): Filename for the annotations file. Default 'annotations.csv'.
+            data_file (str): Filename for the annotations file. Default 'pairs.csv'.
             station_file (str): Filename for station metadata. Default 'station.json'.
-            col_left_timestamp (str): Column name for left image timestamps. Default 'left.timestamp'.
-            col_right_timestamp (str): Column name for right image timestamps. Default 'right.timestamp'.
-            col_left_filename (str): Column name for left image filenames. Default 'left.filename'.
-            col_right_filename (str): Column name for right image filenames. Default 'right.filename'.
+            col_timestamp_1 (str): Column name for left image timestamps. Default 'timestamp_1'.
+            col_timestamp_2 (str): Column name for right image timestamps. Default 'timestamp_2'.
+            col_filename_1 (str): Column name for left image filenames. Default 'filename_1'.
+            col_filename_2 (str): Column name for right image filenames. Default 'filename_2'.
+            col_value_1 (str): Column name for left image values. Default 'value_1'.
+            col_value_2 (str): Column name for right image values. Default 'value_2'.
             col_label (str): Column name for image labels. Default 'rank'.
-            col_ground_truth (str): Column name for ground truth ranks. Default 'true_rank'.
             transform (callable, optional): A function/transform that takes in an image
                 and returns a transformed version. E.g, `transforms.ToTensor`
             label_transform (callable, optional): A function/transform that takes in the
                 target and transforms it.
         """
-        self.col_left_timestamp = col_left_timestamp
-        self.col_right_timestamp = col_right_timestamp
-        self.col_left_filename = col_left_filename
-        self.col_right_filename = col_right_filename
-        self.col_ground_truth = col_ground_truth
+        self.col_timestamp_1 = col_timestamp_1
+        self.col_timestamp_2 = col_timestamp_2
+        self.col_filename_1 = col_filename_1
+        self.col_filename_2 = col_filename_2
+        self.col_value_1 = col_value_1
+        self.col_value_2 = col_value_2
         super().__init__(
             root,
             data_file=data_file,
@@ -213,11 +216,11 @@ class FPERankingPairsDataset(FPEDataset):
         """
         Convert the timestamps in the dataset to the timezone specified in the station metadata.
         """
-        self.data[self.col_left_timestamp] = pd.to_datetime(
-            self.data[self.col_left_timestamp]
+        self.data[self.col_timestamp_1] = pd.to_datetime(
+            self.data[self.col_timestamp_1]
         ).dt.tz_convert(self.station["timezone"])
-        self.data[self.col_right_timestamp] = pd.to_datetime(
-            self.data[self.col_right_timestamp]
+        self.data[self.col_timestamp_2] = pd.to_datetime(
+            self.data[self.col_timestamp_2]
         ).dt.tz_convert(self.station["timezone"])
 
     def __getitem__(self, index: int) -> Tuple:
@@ -236,8 +239,8 @@ class FPERankingPairsDataset(FPEDataset):
             label.
         """
         row = self.data.iloc[index]
-        left_image = self.get_image(row[self.col_left_filename])
-        right_image = self.get_image(row[self.col_right_filename])
+        left_image = self.get_image(row[self.col_filename_1])
+        right_image = self.get_image(row[self.col_filename_2])
         label = row[self.col_label]
 
         if self.transform:
@@ -263,4 +266,4 @@ class FPERankingPairsDataset(FPEDataset):
             values for the R, G, and B channels, and the second list contains the
             average standard deviation of pixel values for the R, G, and B channels.
         """
-        return super().compute_mean_std(self.col_left_filename, n)
+        return super().compute_mean_std(self.col_filename_1, n)
