@@ -1,39 +1,38 @@
 import argparse
 import ast
+import json
 import os
 import shutil
 import time
-import json
-import pandas as pd
+
 import numpy as np
+import pandas as pd
 import torch
 import torch.nn
 import torch.utils.data
 from torchvision.transforms import (
-    Resize,
-    RandomCrop,
     CenterCrop,
-    RandomHorizontalFlip,
-    RandomRotation,
     ColorJitter,
-    Normalize,
     Compose,
     Grayscale,
+    Normalize,
+    RandomCrop,
+    RandomHorizontalFlip,
+    RandomRotation,
+    Resize,
 )
-from utils import (
-    set_seeds,
-    load_pairs,
-    fit,
-    validate,
-)
+
 from datasets import FlowPhotoRankingPairsDataset
-from modules import ResNetRankNet
 from losses import RankNetLoss
+from modules import ResNetRankNet
+from utils import fit, load_pairs, set_seeds, validate
+
 
 def list_all_files(directory):
     for root, dirs, files in os.walk(directory):
         for file in files:
             print(os.path.join(root, file))
+
 
 def create_image_transforms(
     resize_shape,
@@ -59,15 +58,17 @@ def create_image_transforms(
         image_transforms["eval"].append(Grayscale(num_output_channels=3))
 
     # augmentation
-    image_transforms["train"].extend(
-        [
-            RandomCrop(input_shape),
-            RandomHorizontalFlip(),
-            RandomRotation(10),
-            ColorJitter(),
-        ]
-    ) if augmentation else image_transforms["train"].append(
-        CenterCrop(input_shape)
+    (
+        image_transforms["train"].extend(
+            [
+                RandomCrop(input_shape),
+                RandomHorizontalFlip(),
+                RandomRotation(10),
+                ColorJitter(),
+            ]
+        )
+        if augmentation
+        else image_transforms["train"].append(CenterCrop(input_shape))
     )
     image_transforms["eval"].append(CenterCrop(input_shape))
 
@@ -80,6 +81,7 @@ def create_image_transforms(
     image_transforms["train"] = Compose(image_transforms["train"])
     image_transforms["eval"] = Compose(image_transforms["eval"])
     return image_transforms
+
 
 def train(args):
     print("train()")
@@ -100,7 +102,7 @@ def train(args):
     output_data_dir = os.path.join(args.output_dir, "data")
 
     with open(os.path.join(output_data_dir, "args.json"), "w") as f:
-        json.dump(vars(args), f, indent = 2)
+        json.dump(vars(args), f, indent=2)
     print(f'saved args: {os.path.join(output_data_dir, "args.json")}')
 
     print(f"model_dir: {args.model_dir}")
@@ -110,9 +112,9 @@ def train(args):
 
     print("loading pairs from csv files")
     pairs_df = load_pairs(os.path.join(args.values_dir, args.pairs_file))
-    train_df = pairs_df[pairs_df['split'] == "train"]
+    train_df = pairs_df[pairs_df["split"] == "train"]
     print(f"train_df: {train_df.shape[0]} rows")
-    val_df = pairs_df[pairs_df['split'] == "val"]
+    val_df = pairs_df[pairs_df["split"] == "val"]
     print(f"val_df: {val_df.shape[0]} rows")
 
     print("creating train dataset")
@@ -132,7 +134,10 @@ def train(args):
     resize_shape = [args.input_size, np.int32(args.input_size * aspect)]
     print(f"resize_shape: {resize_shape}")
 
-    input_shape = [np.int32(args.input_size * 0.8), np.int32(args.input_size * 0.8 * aspect)]
+    input_shape = [
+        np.int32(args.input_size * 0.8),
+        np.int32(args.input_size * 0.8 * aspect),
+    ]
     print(f"input_shape: {input_shape}")
 
     image_transforms = create_image_transforms(
@@ -186,8 +191,10 @@ def train(args):
         p.requires_grad = False
 
     model = torch.nn.DataParallel(
-       model,
-       device_ids=[args.gpu,],
+        model,
+        device_ids=[
+            args.gpu,
+        ],
     )
     model.to(device)
 
@@ -219,9 +226,7 @@ def train(args):
         metriclogs["epoch"].append(epoch)
 
         start_time = time.time()
-        train_loss = fit(
-            model, criterion, optimizer, train_dl, device, epoch_num=epoch
-        )
+        train_loss = fit(model, criterion, optimizer, train_dl, device, epoch_num=epoch)
         stop_time = time.time()
         metriclogs["train_loss"].append(train_loss)
         print("train step took %0.1f s" % (stop_time - start_time))
@@ -243,13 +248,13 @@ def train(args):
 
         # periodically save model checkpoints and metrics
         epoch_checkpoint_file = "epoch_%02d" % epoch + ".pth"
-        if (args.local):
+        if args.local:
             epoch_checkpoint_save_path = os.path.join(
-               args.model_dir, epoch_checkpoint_file
+                args.model_dir, epoch_checkpoint_file
             )
         else:
             epoch_checkpoint_save_path = os.path.join(
-               args.checkpoint_dir, epoch_checkpoint_file
+                args.checkpoint_dir, epoch_checkpoint_file
             )
         torch.save(
             {
@@ -262,17 +267,21 @@ def train(args):
                     "aspect": aspect,
                     "input_shape": input_shape,
                     "img_sample_mean": img_sample_mean,
-                    "img_sample_std": img_sample_std
-                }
+                    "img_sample_std": img_sample_std,
+                },
             },
             epoch_checkpoint_save_path,
         )
 
-        if (min_val_loss is None or val_loss[0] < min_val_loss):
-            if (min_val_loss is None):
-                print(f"updating final model (epoch={epoch}), first val loss ({val_loss[0]:0.3f})")
+        if min_val_loss is None or val_loss[0] < min_val_loss:
+            if min_val_loss is None:
+                print(
+                    f"updating final model (epoch={epoch}), first val loss ({val_loss[0]:0.3f})"
+                )
             else:
-                print(f"updating final model (epoch={epoch}), lowest val loss ({val_loss[0]:0.3f} < {min_val_loss:0.3f})")
+                print(
+                    f"updating final model (epoch={epoch}), lowest val loss ({val_loss[0]:0.3f} < {min_val_loss:0.3f})"
+                )
             final_model_path = os.path.join(args.model_dir, "model.pth")
             shutil.copy(epoch_checkpoint_save_path, final_model_path)
             min_val_loss = val_loss[0]
@@ -297,65 +306,88 @@ def save_model(model, model_dir):
     path = os.path.join(model_dir, "model")
     model.save(path)
 
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
 
     # SageMaker parameters
     # https://github.com/aws/sagemaker-containers#how-a-script-is-executed-inside-the-container
-    parser.add_argument("--hosts", type=str, default=ast.literal_eval(os.environ["SM_HOSTS"]))
-    parser.add_argument("--current-host", type=str, default=os.environ["SM_CURRENT_HOST"])
+    parser.add_argument(
+        "--hosts", type=str, default=ast.literal_eval(os.environ["SM_HOSTS"])
+    )
+    parser.add_argument(
+        "--current-host", type=str, default=os.environ["SM_CURRENT_HOST"]
+    )
     parser.add_argument("--model-dir", type=str, default=os.environ["SM_MODEL_DIR"])
     parser.add_argument("--checkpoint-dir", type=str, default="/opt/ml/checkpoints")
     parser.add_argument("--output-dir", type=str, default=os.environ["SM_OUTPUT_DIR"])
-    parser.add_argument("--images-dir", type=str, default=os.environ["SM_CHANNEL_IMAGES"])
-    parser.add_argument("--values-dir", type=str, default=os.environ["SM_CHANNEL_VALUES"])
+    parser.add_argument(
+        "--images-dir", type=str, default=os.environ["SM_CHANNEL_IMAGES"]
+    )
+    parser.add_argument(
+        "--values-dir", type=str, default=os.environ["SM_CHANNEL_VALUES"]
+    )
     parser.add_argument("--num-gpus", type=int, default=os.environ["SM_NUM_GPUS"])
 
-    parser.add_argument("--num-workers", type=int, default=4, help="number of data loader workers")
+    parser.add_argument(
+        "--num-workers", type=int, default=4, help="number of data loader workers"
+    )
     parser.add_argument("--gpu", type=int, default=0, help="index of the GPU to use")
-    parser.add_argument("--local", type=bool, default=False, help="running in local mode")
+    parser.add_argument(
+        "--local", type=bool, default=False, help="running in local mode"
+    )
 
     # hyperparameters
     parser.add_argument("--epochs", type=int, default=15, help="number of epochs")
     parser.add_argument("--lr", type=float, default=0.001, help="learning rate")
     parser.add_argument(
-        "--unfreeze-after", type=int, default=2,
+        "--unfreeze-after",
+        type=int,
+        default=2,
         help="number of epochs after which to unfreeze model backbone",
     )
     parser.add_argument(
-        "--batch-size", type=int, default=64,
-        help="batch size of the train loader"
+        "--batch-size", type=int, default=64, help="batch size of the train loader"
     )
-    parser.add_argument(
-        "--random-seed", type=int, default=1691,
-        help="random seed"
-    )
+    parser.add_argument("--random-seed", type=int, default=1691, help="random seed")
 
     # transforms
     parser.add_argument(
-        "--num-image-stats", type=int, default=1000,
+        "--num-image-stats",
+        type=int,
+        default=1000,
         help="number of images to compute mean/stdev",
     )
     parser.add_argument(
-        "--input-size", type=int, default=480,
+        "--input-size",
+        type=int,
+        default=480,
         help="image input size to model",
     )
     parser.add_argument(
-        "--decolorize", type=bool, default=False,
+        "--decolorize",
+        type=bool,
+        default=False,
         help="remove image color channels",
     )
     parser.add_argument(
-        "--normalize", type=bool, default=True,
+        "--normalize",
+        type=bool,
+        default=True,
         help="whether to normalize image inputs to model",
     )
     parser.add_argument(
-        "--augment", type=bool, default=True,
+        "--augment",
+        type=bool,
+        default=True,
         help="whether to use image augmentation during training",
     )
 
     # input files
     parser.add_argument(
-        "--pairs-file", type=str, default="pairs.csv",
+        "--pairs-file",
+        type=str,
+        default="pairs.csv",
         help="filename of CSV file with annotated image pairs",
     )
 
