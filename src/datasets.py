@@ -89,7 +89,10 @@ class FPEDataset(Dataset):
         return image
 
     def compute_mean_std(
-        self, filename_col: Optional[str] = None, n: int = 1000
+        self,
+        indices: Optional[List[int]] = None,
+        filename_col: Optional[str] = None,
+        n: int = 1000,
     ) -> Tuple[List[float], List[float]]:
         """
         Compute and return the average mean and standard deviation of RGB pixel values
@@ -98,6 +101,8 @@ class FPEDataset(Dataset):
         The sample size is the smaller of `n` and the total number of images in the dataset.
 
         Args:
+            indices (List[int], optional): A list of indices to sample from. If not provided,
+                the entire dataset is used.
             filename_col (str, optional): Column name for image filenames used to read images.
                 If not provided, `self.col_filename` is used.
             n (int, optional): The desired sample size. Default is 1000.
@@ -109,9 +114,10 @@ class FPEDataset(Dataset):
         """
         if filename_col is None:
             filename_col = self.col_filename
+        data = self.data if indices is None else self.data.iloc[indices]
         means = torch.zeros(3)
         stds = torch.zeros(3)
-        unique_filenames = self.data[filename_col].unique()
+        unique_filenames = data[filename_col].unique()
         sample_size = min(len(unique_filenames), n)
         sample_indices = torch.randperm(len(unique_filenames))[:sample_size].tolist()
         for i in tqdm(sample_indices):
@@ -251,7 +257,9 @@ class FPERankingPairsDataset(FPEDataset):
 
         return left_image, right_image, label
 
-    def compute_mean_std(self, n: int = 1000) -> Tuple[List[float], List[float]]:
+    def compute_mean_std(
+        self, indices: Optional[List[int]] = None, n: int = 1000
+    ) -> Tuple[List[float], List[float]]:
         """
         Compute and return the average mean and standard deviation of RGB pixel values
         across a sample of images in the dataset.
@@ -259,6 +267,8 @@ class FPERankingPairsDataset(FPEDataset):
         The sample size is the smaller of `n` and the total number of images in the dataset.
 
         Args:
+            indices (List[int], optional): A list of indices to sample from. If not provided,
+                the entire dataset is used.
             n (int, optional): The desired sample size. Default is 1000.
 
         Returns:
@@ -266,4 +276,4 @@ class FPERankingPairsDataset(FPEDataset):
             values for the R, G, and B channels, and the second list contains the
             average standard deviation of pixel values for the R, G, and B channels.
         """
-        return super().compute_mean_std(self.col_filename_1, n)
+        return super().compute_mean_std(indices, self.col_filename_1, n)
