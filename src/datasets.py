@@ -1,143 +1,266 @@
+import json
 import os
-import random
-from typing import Dict, Tuple
-import numpy as np
+from typing import Callable, List, Optional, Tuple
+
 import pandas as pd
-from itertools import combinations
-from PIL import Image, ImageStat
+import torch
 from torch.utils.data import Dataset
 from torchvision.io import read_image
 from tqdm import tqdm
-from sklearn.model_selection import StratifiedShuffleSplit
 
-class FlowPhotoDataset(Dataset):
+
+class FPEDataset(Dataset):
     """
-    Args:
-        table (_type_): _description_
-        data_dir (_type_): _description_
-        col_image_id (_type_): _description_
-        col_timestamp (_type_): _description_
-        col_filename (_type_): _description_
-        col_label (_type_): _description_
-        transform (_type_): _description_
-        label_transform (_type_): _description_
+    A PyTorch Dataset class for handling USGS Flow Photo Explorer (FPE) datasets.
+
+    This class assumes that the `root` directory contains the following:
+    - A CSV file named `images.csv` (or another name if specified) that contains metadata about the images.
+      This file should have columns for image IDs, timestamps, filenames, and labels.
+    - A JSON file named `station.json` (or another name if specified) that contains metadata about the station.
+    - A directory of images, with the image filenames matching those in the `images.csv` file. The filenames in
+      the `images.csv` file should be relative to the `root` directory.
     """
 
     def __init__(
         self,
-        table,
-        data_dir,
-        col_image_id="image_id",
-        col_timestamp="timestamp",
-        col_filename="filename",
-        col_label="value",
-        transform=None,
+        root: str,
+        data_file: str = "images.csv",
+        station_file: str = "station.json",
+        col_timestamp: str = "timestamp",
+        col_filename: str = "filename",
+        col_label: str = "value",
+        transform: Optional[Callable] = None,
+        label_transform: Optional[Callable] = None,
     ) -> None:
-        self.table = table
-        self.data_dir = data_dir
-        self.cols = {
-            "filename": col_filename,
-            "label": col_label,
-            "timestamp": col_timestamp,
-            "image_id": col_image_id,
-        }
+        """
+        Args:
+            root (str): Root directory where images are downloaded to.
+            data_file (str): Filename for the images file. Default 'images.csv'.
+            station_file (str): Filename for station metadata. Default 'station.json'.
+            col_timestamp (str): Column name for image timestamps. Default 'timestamp'.
+            col_filename (str): Column name for image filenames. Default 'filename'.
+            col_label (str): Column name for image labels. Default 'value'.
+            transform (callable, optional): A function/transform that takes in an image
+                and returns a transformed version. E.g, `transforms.ToTensor`
+            label_transform (callable, optional): A function/transform that takes in the
+                target and transforms it.
+        """
+        self.root = root
+        self.data = pd.read_csv(os.path.join(root, data_file))
+        with open(os.path.join(root, station_file)) as f:
+            self.station = json.load(f)
+        self.col_timestamp = col_timestamp
+        self.col_filename = col_filename
+        self.col_label = col_label
         self.transform = transform
+        self.label_transform = label_transform
+        self.convert_timezone()
+
+    def convert_timezone(self) -> None:
+        """
+        Convert the timestamps in the dataset to the timezone specified in the station metadata.
+        """
+        self.data[self.col_timestamp] = pd.to_datetime(
+            self.data[self.col_timestamp]
+        ).dt.tz_convert(self.station["timezone"])
 
     def __len__(self) -> int:
-        return len(self.table)
+        return len(self.data)
 
-    def get_image(self, index):
-        filename = self.table.iloc[index][self.cols["filename"]]
-        image_path = os.path.join(self.data_dir, filename)
-        try:
-            image = read_image(image_path)
-            image = image / 255.0  # convert to float in [0,1]
-            return image
-        except:
-            print(f"Could not read image index {index} ({image_path})")
+    def get_image(self, filename: str) -> torch.Tensor:
+        """Fetch the image at the given index in the dataset.
 
-    def __getitem__(self, index) -> Tuple:
-        image = self.get_image(index)
-        label = self.table.iloc[index][self.cols["label"]]
-        if self.transform:
-            image = self.transform(image)
-        return image, label
+        Args:
+            filename (str): The filename of the image to fetch.
 
-    def compute_mean_std(self, n=1000):
-        """Compute RGB channel means and stds for image samples in the dataset."""
-        means = np.zeros((3))
-        stds = np.zeros((3))
-        sample_size = min(len(self.table), n)
-        sample_indices = np.random.choice(
-            len(self.table), size=sample_size, replace=False
-        )
-        for idx in tqdm(sample_indices):
-            image = self.get_image(idx)
-            means += np.array(image.mean(dim=[1, 2]))
-            stds += np.array(image.std(dim=[1, 2]))
-            # stat = PILImageStat.Stat(image)
-            # means += np.array(stat.mean) / 255.0
-            # stds += np.array(stat.stddev) / 255.0
-        means = means / sample_size
-        stds = stds / sample_size
-        return means, stds
+        Returns:
+            torch.Tensor: The image as a 3D tensor of type torch.float32 with
+            shape (C, H, W), where C is the number of channels, H is the height
+            of the image, and W is the width of the image. The values of the
+            tensor are in the range [0, 1] and represent pixel intensities.
 
-    def set_mean_std(self, means, stds):
+        Raises:
+            FileNotFoundError: If the image file does not exist.
+        """
+        image_path = os.path.join(self.root, filename)
+        if not os.path.exists(image_path):
+            raise FileNotFoundError(f"Image file not found: {image_path}")
+        image = read_image(image_path).float() / 255.0
+        return image
+
+    def compute_mean_std(
+        self, filename_col: Optional[str] = None, n: int = 1000
+    ) -> Tuple[List[float], List[float]]:
+        """
+        Compute and return the average mean and standard deviation of RGB pixel values
+        across a sample of images in the dataset.
+
+        The sample size is the smaller of `n` and the total number of images in the dataset.
+
+        Args:
+            filename_col (str, optional): Column name for image filenames used to read images.
+                If not provided, `self.col_filename` is used.
+            n (int, optional): The desired sample size. Default is 1000.
+
+        Returns:
+            A tuple of two lists: the first list contains the average mean pixel
+            values for the R, G, and B channels, and the second list contains the
+            average standard deviation of pixel values for the R, G, and B channels.
+        """
+        if filename_col is None:
+            filename_col = self.col_filename
+        means = torch.zeros(3)
+        stds = torch.zeros(3)
+        sample_size = min(len(self), n)
+        sample_indices = torch.randperm(len(self))[:sample_size].tolist()
+        for i in tqdm(sample_indices):
+            row = self.data.iloc[i]
+            image = self.get_image(row[filename_col])
+            means += image.mean(dim=[1, 2])
+            stds += image.std(dim=[1, 2])
+        means /= sample_size
+        stds /= sample_size
+        return means.tolist(), stds.tolist()
+
+    def set_mean_std(self, means: List[float], stds: List[float]) -> None:
+        """
+        Set the mean and standard deviation of RGB pixel values for the dataset.
+
+        Args:
+            means (List[float]): The average mean pixel values for the R, G, and B channels.
+            stds (List[float]): The average standard deviation of pixel values for the R, G, and B channels.
+        """
         self.means = means
         self.stds = stds
 
-class FlowPhotoRankingPairsDataset():
+    def __getitem__(self, index: int) -> Tuple:
+        """
+        Fetch the image and the corresponding label at the given index.
+
+        Args:
+            index (int): The index of the image to fetch.
+
+        Returns:
+            tuple: A tuple containing the image and the label.
+        """
+        row = self.data.iloc[index]
+        image = self.get_image(row[self.col_filename])
+        label = row[self.col_label]
+        if self.transform:
+            image = self.transform(image)
+        if self.label_transform:
+            label = self.label_transform(label)
+        return image, label
+
+
+class FPERankingPairsDataset(FPEDataset):
+    """
+    A PyTorch Dataset class for handling USGS Flow Photo Explorer (FPE) ranked pair datasets.
+
+    This class assumes that the `root` directory contains the following:
+    - A CSV file named `annotations.csv` (or another name if specified) that contains metadata about the image pairs.
+      This file should have columns for pair IDs, timestamps, filenames, and labels.
+    - A JSON file named `station.json` (or another name if specified) that contains metadata about the station.
+    - A directory of images, with the image filenames matching those in the `annotations.csv` file. The filenames in
+      the `annotations.csv` file should be relative to the `root` directory.
+    """
+
     def __init__(
         self,
-        table,
-        images_dir,
-        transform=None,
+        root: str,
+        data_file: str = "annotations.csv",
+        station_file: str = "station.json",
+        col_left_timestamp: str = "left.timestamp",
+        col_right_timestamp: str = "right.timestamp",
+        col_left_filename: str = "left.filename",
+        col_right_filename: str = "right.filename",
+        col_label: str = "rank",
+        col_ground_truth: str = "true_rank",
+        transform: Optional[Callable] = None,
+        label_transform: Optional[Callable] = None,
     ) -> None:
-        self.table = table
-        self.images_dir = images_dir
-        self.transform = transform
-
-    def get_image(self, filename):
-        image_path = os.path.join(self.images_dir, filename)
-
-        try:
-            image = read_image(image_path)
-            image = image / 255.0  # convert to float in [0,1]
-            return image
-        except:
-            print(f"Could not read image ({filename})")
-
-    def compute_mean_std(self, n=1000):
-        """Compute RGB channel means and stds for image samples in the dataset."""
-        means = np.zeros((3))
-        stds = np.zeros((3))
-        sample_size = min(len(self.table), n)
-        sample_indices = np.random.choice(
-            len(self.table), size=sample_size, replace=False
+        """
+        Args:
+            root (str): Root directory where images are downloaded to.
+            data_file (str): Filename for the annotations file. Default 'annotations.csv'.
+            station_file (str): Filename for station metadata. Default 'station.json'.
+            col_left_timestamp (str): Column name for left image timestamps. Default 'left.timestamp'.
+            col_right_timestamp (str): Column name for right image timestamps. Default 'right.timestamp'.
+            col_left_filename (str): Column name for left image filenames. Default 'left.filename'.
+            col_right_filename (str): Column name for right image filenames. Default 'right.filename'.
+            col_label (str): Column name for image labels. Default 'rank'.
+            col_ground_truth (str): Column name for ground truth ranks. Default 'true_rank'.
+            transform (callable, optional): A function/transform that takes in an image
+                and returns a transformed version. E.g, `transforms.ToTensor`
+            label_transform (callable, optional): A function/transform that takes in the
+                target and transforms it.
+        """
+        self.col_left_timestamp = col_left_timestamp
+        self.col_right_timestamp = col_right_timestamp
+        self.col_left_filename = col_left_filename
+        self.col_right_filename = col_right_filename
+        self.col_ground_truth = col_ground_truth
+        super().__init__(
+            root,
+            data_file=data_file,
+            station_file=station_file,
+            col_label=col_label,
+            transform=transform,
+            label_transform=label_transform,
         )
-        for idx in tqdm(sample_indices):
-            pair = self.get_pair(idx)
-            image = self.get_image(pair['filename_1'])
-            means += np.array(image.mean(dim=[1, 2]))
-            stds += np.array(image.std(dim=[1, 2]))
-        means = means / sample_size
-        stds = stds / sample_size
-        return means, stds
 
-    def get_pair(self, index):
-        return self.table.iloc[index]
+    def convert_timezone(self) -> None:
+        """
+        Convert the timestamps in the dataset to the timezone specified in the station metadata.
+        """
+        self.data[self.col_left_timestamp] = pd.to_datetime(
+            self.data[self.col_left_timestamp]
+        ).dt.tz_convert(self.station["timezone"])
+        self.data[self.col_right_timestamp] = pd.to_datetime(
+            self.data[self.col_right_timestamp]
+        ).dt.tz_convert(self.station["timezone"])
 
-    def __len__(self):
-        return len(self.table)
+    def __getitem__(self, index: int) -> Tuple:
+        """
+        Fetch the pair of images and the corresponding label at the given index.
 
-    def __getitem__(self, idx):
-        pair = self.get_pair(idx)
-        image1 = self.get_image(pair['filename_1'])
-        image2 = self.get_image(pair['filename_2'])
-        label = pair['label']
+        This method is overridden from the parent class to handle pairs of images.
+        Instead of returning a single image and a label, it returns a pair of
+        images and a label.
+
+        Args:
+            index (int): The index of the pair to fetch.
+
+        Returns:
+            tuple: A tuple containing the left image, the right image, and the
+            label.
+        """
+        row = self.data.iloc[index]
+        left_image = self.get_image(row[self.col_left_filename])
+        right_image = self.get_image(row[self.col_right_filename])
+        label = row[self.col_label]
 
         if self.transform:
-            image1 = self.transform(image1)
-            image2 = self.transform(image2)
+            left_image = self.transform(left_image)
+            right_image = self.transform(right_image)
+        if self.label_transform:
+            label = self.label_transform(label)
 
-        return image1, image2, label
+        return left_image, right_image, label
+
+    def compute_mean_std(self, n: int = 1000) -> Tuple[List[float], List[float]]:
+        """
+        Compute and return the average mean and standard deviation of RGB pixel values
+        across a sample of images in the dataset.
+
+        The sample size is the smaller of `n` and the total number of images in the dataset.
+
+        Args:
+            n (int, optional): The desired sample size. Default is 1000.
+
+        Returns:
+            A tuple of two lists: the first list contains the average mean pixel
+            values for the R, G, and B channels, and the second list contains the
+            average standard deviation of pixel values for the R, G, and B channels.
+        """
+        return super().compute_mean_std(self.col_left_filename, n)
