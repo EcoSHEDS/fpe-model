@@ -1,11 +1,14 @@
-import time
 import random
+import time
+from urllib.parse import urlparse
+
 import numpy as np
 import pandas as pd
-from urllib.parse import urlparse
-from tqdm import tqdm
-from losses import RankNetLoss
 import torch
+from tqdm import tqdm
+
+from src.losses import RankNetLoss
+
 
 def get_url_path(url):
     return urlparse(url).path[1:]
