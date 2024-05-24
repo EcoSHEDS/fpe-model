@@ -182,7 +182,7 @@ class FPERankingPairsDataset(FPEDataset):
         col_filename_2: str = "filename_2",
         col_value_1: str = "value_1",
         col_value_2: str = "value_2",
-        col_label: str = "rank",
+        col_label: str = "label",
         transform: Optional[Callable] = None,
         label_transform: Optional[Callable] = None,
     ) -> None:
@@ -197,7 +197,7 @@ class FPERankingPairsDataset(FPEDataset):
             col_filename_2 (str): Column name for right image filenames. Default 'filename_2'.
             col_value_1 (str): Column name for left image values. Default 'value_1'.
             col_value_2 (str): Column name for right image values. Default 'value_2'.
-            col_label (str): Column name for image labels. Default 'rank'.
+            col_label (str): Column name for image labels. Default 'label'.
             transform (callable, optional): A function/transform that takes in an image
                 and returns a transformed version. E.g, `transforms.ToTensor`
             label_transform (callable, optional): A function/transform that takes in the
