@@ -22,7 +22,7 @@ from torchvision.transforms import (
     Resize,
 )
 
-from datasets import FlowPhotoRankingPairsDataset
+from datasets import FPERankingPairsDataset
 from losses import RankNetLoss
 from modules import ResNetRankNet
 from utils import fit, load_pairs, set_seeds, validate
@@ -110,27 +110,42 @@ def train(args):
     print(f"set seeds ({args.random_seed})")
     set_seeds(args.random_seed)
 
-    print("loading pairs from csv files")
-    pairs_df = load_pairs(os.path.join(args.values_dir, args.pairs_file))
-    train_df = pairs_df[pairs_df["split"] == "train"]
-    print(f"train_df: {train_df.shape[0]} rows")
-    val_df = pairs_df[pairs_df["split"] == "val"]
-    print(f"val_df: {val_df.shape[0]} rows")
+    # LOAD DATA
 
-    print("creating train dataset")
-    train_ds = FlowPhotoRankingPairsDataset(
-        train_df,
-        args.images_dir,
+    ds = FPERankingPairsDataset(
+        args.root_dir,
+        args.pair_file,
     )
+    train_indices = ds.data[ds.data["split"] == "train"].index
+    val_indices = ds.data[ds.data["split"] == "val"].index
+    # FIXME: mean/std should probably be computed on all in-distribution images, not just annotated ones
+    img_sample_mean, img_sample_std = ds.compute_mean_std(
+        indices=train_indices, n=args.num_image_stats
+    )
+    ds.set_mean_std(img_sample_mean, img_sample_std)
+    train_ds = torch.utils.data.Subset(ds, train_indices)
+    val_ds = torch.utils.data.Subset(ds, val_indices)
 
-    print("computing image stats")
-    img_sample_mean, img_sample_std = train_ds.compute_mean_std(args.num_image_stats)
-    print(f"img_sample_mean: {img_sample_mean}")
-    print(f"img_sample_std: {img_sample_std}")
+    # print("loading pairs from csv files")
+    # pairs_df = load_pairs(os.path.join(args.values_dir, args.pairs_file))
+    # train_df = pairs_df[pairs_df["split"] == "train"]
+    # print(f"train_df: {train_df.shape[0]} rows")
+    # val_df = pairs_df[pairs_df["split"] == "val"]
+    # print(f"val_df: {val_df.shape[0]} rows")
 
-    pair = train_ds.get_pair(0)
-    image = train_ds.get_image(pair["filename_1"])
-    aspect = image.shape[2] / image.shape[1]
+    # print("creating train dataset")
+    # train_ds = FPERankingPairsDataset(
+    #     train_df,
+    #     args.images_dir,
+    # )
+
+    # print("computing image stats")
+    # img_sample_mean, img_sample_std = train_ds.compute_mean_std(args.num_image_stats)
+    # print(f"img_sample_mean: {img_sample_mean}")
+    # print(f"img_sample_std: {img_sample_std}")
+
+    img_1, _, _ = train_ds[0]
+    aspect = img_1.shape[2] / img_1.shape[1]
     resize_shape = [args.input_size, np.int32(args.input_size * aspect)]
     print(f"resize_shape: {resize_shape}")
 
@@ -150,15 +165,16 @@ def train(args):
         normalization=args.normalize,
     )
     train_ds.transform = image_transforms["train"]
+    val_ds.transform = image_transforms["eval"]
 
-    print("creating val datasets")
-    print(f"val df: {len(val_df)}")
-    val_ds = FlowPhotoRankingPairsDataset(
-        val_df,
-        args.images_dir,
-        transform=image_transforms["eval"],
-    )
-    print(f"val ds: {len(val_ds)}")
+    # print("creating val datasets")
+    # print(f"val df: {len(val_df)}")
+    # val_ds = FPERankingPairsDataset(
+    #     val_df,
+    #     args.images_dir,
+    #     transform=image_transforms["eval"],
+    # )
+    # print(f"val ds: {len(val_ds)}")
 
     print("creating data loaders")
     train_dl = torch.utils.data.DataLoader(
@@ -384,6 +400,11 @@ if __name__ == "__main__":
     )
 
     # input files
+    parser.add_argument(
+        "--root-dir",
+        type=str,
+        help="root directory containing images and values directories",
+    )
     parser.add_argument(
         "--pairs-file",
         type=str,
