@@ -88,7 +88,7 @@ def train(args):
     print("args:")
     print(args.__dict__)
 
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    device = torch.device(f"cuda:{args.gpu}" if torch.cuda.is_available() else "cpu")
     print("device: {}".format(device))
 
     print(f"images_dir: {args.images_dir}")
@@ -188,12 +188,12 @@ def train(args):
     # INITIALIZE MODEL
     # # # # # # # # # # # # # # # # # # # # # # # # #
     print("initializing model")
-    if torch.cuda.is_available():
-        device = torch.device(f"cuda:{args.gpu}")
-        print(f"using GPU {args.gpu} to train")
-    else:
-        device = torch.device("cpu")
-        print("using CPU to train")
+    # if torch.cuda.is_available():
+    #     device = torch.device(f"cuda:{args.gpu}")
+    #     print(f"using GPU {args.gpu} to train")
+    # else:
+    #     device = torch.device("cpu")
+    #     print("using CPU to train")
     model = ResNetRankNet(
         input_shape=(3, input_shape[0], input_shape[1]),
         transforms=image_transforms,
