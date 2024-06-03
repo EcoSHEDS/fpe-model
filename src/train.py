@@ -1,4 +1,3 @@
-import argparse
 import ast
 import json
 import os
@@ -13,25 +12,26 @@ import torch.utils.data
 from torchvision.transforms import (
     CenterCrop,
     ColorJitter,
-    Compose,
     Grayscale,
     Normalize,
     RandomCrop,
+    RandomGrayscale,
     RandomHorizontalFlip,
     RandomRotation,
     Resize,
 )
 
-from datasets import FPERankingPairsDataset
+from datasets import DatasetSubset, FPERankingPairsDataset
 from losses import RankNetLoss
 from modules import ResNetRankNet
-from utils import fit, load_pairs, set_seeds, validate
-
-
-def list_all_files(directory):
-    for root, dirs, files in os.walk(directory):
-        for file in files:
-            print(os.path.join(root, file))
+from utils import (
+    ArgumentBuilder,
+    TransformBuilder,
+    fit,
+    load_pairs,
+    set_seeds,
+    validate,
+)
 
 
 def create_image_transforms(
@@ -43,44 +43,33 @@ def create_image_transforms(
     means=None,
     stds=None,
 ):
-    image_transforms = {
-        "train": [
-            Resize(resize_shape),
-        ],
-        "eval": [
-            Resize(resize_shape),
-        ],
-    }
-
-    # decolorize
-    if decolorize:
-        image_transforms["train"].append(Grayscale(num_output_channels=3))
-        image_transforms["eval"].append(Grayscale(num_output_channels=3))
-
-    # augmentation
-    (
-        image_transforms["train"].extend(
-            [
-                RandomCrop(input_shape),
-                RandomHorizontalFlip(),
-                RandomRotation(10),
-                ColorJitter(),
-            ]
-        )
-        if augmentation
-        else image_transforms["train"].append(CenterCrop(input_shape))
+    transform_builder = TransformBuilder()
+    transform_builder.add_transforms(
+        ["train", "eval"], [(Resize, {"size": resize_shape})]
     )
-    image_transforms["eval"].append(CenterCrop(input_shape))
-
-    # normalization (except when decolorizing)
-    if normalization and not decolorize:
-        image_transforms["train"].append(Normalize(means, stds))
-        image_transforms["eval"].append(Normalize(means, stds))
-
-    # composition
-    image_transforms["train"] = Compose(image_transforms["train"])
-    image_transforms["eval"] = Compose(image_transforms["eval"])
-    return image_transforms
+    if decolorize:
+        transform_builder.add_transforms(
+            ["train", "eval"], [(Grayscale, {"num_output_channels": 3})]
+        )
+    if augmentation:
+        transform_builder.add_transforms(
+            "train",
+            [
+                (RandomHorizontalFlip, {}),
+                (RandomRotation, {"degrees": 10}),
+                (RandomCrop, {"size": input_shape}),
+                (ColorJitter, {}),
+                (RandomGrayscale, {}) if not decolorize else None,
+            ],
+        )
+    else:
+        transform_builder.add_transforms("train", [(CenterCrop, {"size": input_shape})])
+    transform_builder.add_transforms("eval", [(CenterCrop, {"size": input_shape})])
+    if normalization:
+        transform_builder.add_transforms(
+            ["train", "eval"], [(Normalize, {"mean": means, "std": stds})]
+        )
+    return transform_builder.build()
 
 
 def train(args):
@@ -92,10 +81,8 @@ def train(args):
     print("device: {}".format(device))
 
     print(f"images_dir: {args.images_dir}")
-    # list_all_files(args.images_dir)
 
     print(f"values_dir: {args.values_dir}")
-    # list_all_files(args.values_dir)
 
     print(f"output_dir: {args.output_dir}")
 
@@ -112,10 +99,7 @@ def train(args):
 
     # LOAD DATA
 
-    ds = FPERankingPairsDataset(
-        args.root_dir,
-        args.pair_file,
-    )
+    ds = FPERankingPairsDataset(args.root_dir, args.pair_file)
     train_indices = ds.data[ds.data["split"] == "train"].index
     val_indices = ds.data[ds.data["split"] == "val"].index
     # FIXME: mean/std should probably be computed on all in-distribution images, not just annotated ones
@@ -123,28 +107,16 @@ def train(args):
         indices=train_indices, n=args.num_image_stats
     )
     ds.set_mean_std(img_sample_mean, img_sample_std)
-    train_ds = torch.utils.data.Subset(ds, train_indices)
-    val_ds = torch.utils.data.Subset(ds, val_indices)
 
     # print("loading pairs from csv files")
-    # pairs_df = load_pairs(os.path.join(args.values_dir, args.pairs_file))
-    # train_df = pairs_df[pairs_df["split"] == "train"]
     # print(f"train_df: {train_df.shape[0]} rows")
-    # val_df = pairs_df[pairs_df["split"] == "val"]
     # print(f"val_df: {val_df.shape[0]} rows")
 
-    # print("creating train dataset")
-    # train_ds = FPERankingPairsDataset(
-    #     train_df,
-    #     args.images_dir,
-    # )
-
     # print("computing image stats")
-    # img_sample_mean, img_sample_std = train_ds.compute_mean_std(args.num_image_stats)
     # print(f"img_sample_mean: {img_sample_mean}")
     # print(f"img_sample_std: {img_sample_std}")
 
-    img_1, _, _ = train_ds[0]
+    img_1, _, _ = ds[0]
     aspect = img_1.shape[2] / img_1.shape[1]
     resize_shape = [args.input_size, np.int32(args.input_size * aspect)]
     print(f"resize_shape: {resize_shape}")
@@ -164,17 +136,13 @@ def train(args):
         augmentation=args.augment,
         normalization=args.normalize,
     )
-    train_ds.transform = image_transforms["train"]
-    val_ds.transform = image_transforms["eval"]
+    print("creating train dataset")
+    train_ds = DatasetSubset(ds, train_indices, transform=image_transforms["train"])
 
-    # print("creating val datasets")
+    print("creating val datasets")
     # print(f"val df: {len(val_df)}")
-    # val_ds = FPERankingPairsDataset(
-    #     val_df,
-    #     args.images_dir,
-    #     transform=image_transforms["eval"],
-    # )
-    # print(f"val ds: {len(val_ds)}")
+    val_ds = DatasetSubset(ds, val_indices, transform=image_transforms["eval"])
+    print(f"val ds: {len(val_ds)}")
 
     print("creating data loaders")
     train_dl = torch.utils.data.DataLoader(
@@ -188,12 +156,6 @@ def train(args):
     # INITIALIZE MODEL
     # # # # # # # # # # # # # # # # # # # # # # # # #
     print("initializing model")
-    # if torch.cuda.is_available():
-    #     device = torch.device(f"cuda:{args.gpu}")
-    #     print(f"using GPU {args.gpu} to train")
-    # else:
-    #     device = torch.device("cpu")
-    #     print("using CPU to train")
     model = ResNetRankNet(
         input_shape=(3, input_shape[0], input_shape[1]),
         transforms=image_transforms,
@@ -324,9 +286,16 @@ def save_model(model, model_dir):
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
+    arg_builder = ArgumentBuilder()
+    parser = (
+        arg_builder.add_resource_args()
+        .add_hyperparameter_args()
+        .add_transform_args()
+        .build()
+    )
 
     # SageMaker parameters
+    # These are used when the script is run within a SageMaker training job
     # https://github.com/aws/sagemaker-containers#how-a-script-is-executed-inside-the-container
     parser.add_argument(
         "--hosts", type=str, default=ast.literal_eval(os.environ["SM_HOSTS"])
@@ -344,60 +313,6 @@ if __name__ == "__main__":
         "--values-dir", type=str, default=os.environ["SM_CHANNEL_VALUES"]
     )
     parser.add_argument("--num-gpus", type=int, default=os.environ["SM_NUM_GPUS"])
-
-    parser.add_argument(
-        "--num-workers", type=int, default=4, help="number of data loader workers"
-    )
-    parser.add_argument("--gpu", type=int, default=0, help="index of the GPU to use")
-    parser.add_argument(
-        "--local", type=bool, default=False, help="running in local mode"
-    )
-
-    # hyperparameters
-    parser.add_argument("--epochs", type=int, default=15, help="number of epochs")
-    parser.add_argument("--lr", type=float, default=0.001, help="learning rate")
-    parser.add_argument(
-        "--unfreeze-after",
-        type=int,
-        default=2,
-        help="number of epochs after which to unfreeze model backbone",
-    )
-    parser.add_argument(
-        "--batch-size", type=int, default=64, help="batch size of the train loader"
-    )
-    parser.add_argument("--random-seed", type=int, default=1691, help="random seed")
-
-    # transforms
-    parser.add_argument(
-        "--num-image-stats",
-        type=int,
-        default=1000,
-        help="number of images to compute mean/stdev",
-    )
-    parser.add_argument(
-        "--input-size",
-        type=int,
-        default=480,
-        help="image input size to model",
-    )
-    parser.add_argument(
-        "--decolorize",
-        type=bool,
-        default=False,
-        help="remove image color channels",
-    )
-    parser.add_argument(
-        "--normalize",
-        type=bool,
-        default=True,
-        help="whether to normalize image inputs to model",
-    )
-    parser.add_argument(
-        "--augment",
-        type=bool,
-        default=True,
-        help="whether to use image augmentation during training",
-    )
 
     # input files
     parser.add_argument(
