@@ -1,10 +1,11 @@
 import json
 import os
-from typing import Callable, List, Optional, Tuple
+from copy import deepcopy
+from typing import Any, Callable, List, Optional, Tuple
 
 import pandas as pd
 import torch
-from torch.utils.data import Dataset
+from torch.utils.data import Dataset, Subset
 from torchvision.io import read_image
 from tqdm import tqdm
 
@@ -158,6 +159,17 @@ class FPEDataset(Dataset):
             label = self.label_transform(label)
         return image, label
 
+    @property
+    def image_shape(self) -> Tuple[int, int, int]:
+        """
+        Get the shape of the images in the dataset.
+
+        Returns:
+            tuple: A tuple containing the number of channels, height, and width of the images.
+        """
+        image = self.get_image(self.data[self.col_filename].iloc[0])
+        return image.shape
+
 
 class FPERankingPairsDataset(FPEDataset):
     """
@@ -277,3 +289,50 @@ class FPERankingPairsDataset(FPEDataset):
             average standard deviation of pixel values for the R, G, and B channels.
         """
         return super().compute_mean_std(indices, self.col_filename_1, n)
+
+    @property
+    def image_shape(self) -> Tuple[int, int, int]:
+        """
+        Get the shape of the images in the dataset.
+
+        Returns:
+            tuple: A tuple containing the number of channels, height, and width of the images.
+        """
+        image = self.get_image(self.data[self.col_filename_1].iloc[0])
+        return image.shape
+
+
+class DatasetSubset(Subset):
+    """
+    A PyTorch Subset subclass for applying specific transforms to dataset subsets.
+
+    This class creates a deep copy of the original dataset and assigns a provided transform to it.
+    The transform is applied by the copy dataset's __getitem__ method when accessing items.
+    """
+
+    def __init__(self, dataset: Dataset, indices: List[int], transform: Callable):
+        """
+        Initialize a DatasetSubset instance.
+
+        Args:
+            dataset (Dataset): The original PyTorch Dataset.
+            indices (List[int]): Indices defining the subset.
+            transform (Callable): Transform to be assigned to the dataset subset.
+        """
+        self.dataset = deepcopy(dataset)
+        self.dataset.transform = transform
+        super().__init__(self.dataset, indices)
+
+    def __getitem__(self, idx: int) -> Any:
+        """
+        Retrieve an item from the subset by index.
+
+        The item is transformed by the dataset's __getitem__ method, which applies the assigned transform.
+
+        Args:
+            idx (int): The index of the item.
+
+        Returns:
+            Any: The transformed item at the given index.
+        """
+        return self.dataset[self.indices[idx]]
