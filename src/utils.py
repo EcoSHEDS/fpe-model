@@ -1,10 +1,13 @@
+import argparse
 import random
 import time
+from typing import Any, Callable, Dict, List, Optional, Tuple, Type, Union
 from urllib.parse import urlparse
 
 import numpy as np
 import pandas as pd
 import torch
+from torchvision.transforms import Compose
 from tqdm import tqdm
 
 from src.losses import RankNetLoss
@@ -12,6 +15,7 @@ from src.losses import RankNetLoss
 
 def get_url_path(url):
     return urlparse(url).path[1:]
+
 
 def set_seeds(seed, multigpu=False):
     random.seed(seed)
@@ -31,23 +35,175 @@ def set_seeds(seed, multigpu=False):
     # torch.backends.cudnn.deterministic = True # this might be slowing down training
 
 
-def load_data(data_file, col_timestamp="timestamp", col_filename="filename", col_url="url"):
+def load_data(
+    data_file, col_timestamp="timestamp", col_filename="filename", col_url="url"
+):
     df = pd.read_csv(data_file)
     df[col_timestamp] = pd.to_datetime(df[col_timestamp])
     df[col_filename] = df[col_url].apply(get_url_path)
     df.sort_values(by=col_timestamp, inplace=True, ignore_index=True)
     return df
 
+
 def load_pairs(data_file):
     df = pd.read_csv(data_file)
-    df['timestamp_1'] = pd.to_datetime(df['timestamp_1'])
-    df['timestamp_2'] = pd.to_datetime(df['timestamp_2'])
+    df["timestamp_1"] = pd.to_datetime(df["timestamp_1"])
+    df["timestamp_2"] = pd.to_datetime(df["timestamp_2"])
     return df
+
 
 def get_output_shape(model, input_shape=(1, 3, 224, 224)):
     x = torch.randn(*input_shape)
     out = model(x)
     return out.shape
+
+
+class ArgumentBuilder:
+    def __init__(self) -> None:
+        self.parser = argparse.ArgumentParser()
+
+    def add_resource_args(self):
+        self.parser.add_argument(
+            "--gpu", type=int, default=0, help="GPU device to use for training"
+        )
+        self.parser.add_argument(
+            "--num-workers",
+            type=int,
+            default=4,
+            help="Number of workers for data loaders",
+        )
+        self.parser.add_argument(
+            "--local",
+            action="store_true",
+            help="Run training locally",
+        )
+        return self
+
+    def add_hyperparameter_args(self):
+        self.parser.add_argument(
+            "--epochs",
+            type=int,
+            default=15,
+            help="Number of epochs to train the model",
+        )
+        self.parser.add_argument(
+            "--batch-size",
+            type=int,
+            default=64,
+            help="Number of samples in a training batch",
+        )
+        self.parser.add_argument(
+            "--lr", type=float, default=0.001, help="Learning rate for the optimizer"
+        )
+        self.parser.add_argument(
+            "--random-seed",
+            type=int,
+            default=1691,
+            help="Seed for random number generators",
+        )
+        self.parser.add_argument(
+            "--unfreeze-after",
+            type=int,
+            default=2,
+            help="Number of epochs after which to unfreeze model backbone",
+        )
+
+    def add_transform_args(self):
+        self.parser.add_argument(
+            "--num-image-stats",
+            type=int,
+            default=1000,
+            help="Number of images to use for computing mean and std",
+        )
+        self.parser.add_argument(
+            "--input-size",
+            type=int,
+            default=480,
+            help="Size of input images for the model",
+        )
+        self.parser.add_argument(
+            "--decolorize",
+            action="store_true",
+            help="Remove image color channels",
+        )
+        self.parser.add_argument(
+            "--augment",
+            action="store_true",
+            help="Apply data augmentation during training",
+        )
+        self.parser.add_argument(
+            "--normalize", action="store_true", help="Normalize image inputs to model"
+        )
+        return self
+
+    def build(self):
+        return self.parser
+
+
+class TransformBuilder:
+    """
+    A builder class for creating a set of transforms for training and
+    evaluation.
+
+    Attributes:
+        transforms (Dict[str, List[Tuple[Type[Transform], Dict[str, Any]]]]):
+        A dictionary containing lists of tuples, each containing a transform
+        and its parameters, for each phase ("train" and "eval").
+    """
+
+    def __init__(self):
+        """
+        Initializes the TransformBuilder with empty lists of transforms for
+        training and evaluation.
+        """
+        self.transforms: Dict[str, List[Tuple[Type[Callable], Dict[str, Any]]]] = {
+            "train": [],
+            "eval": [],
+        }
+
+    def add_transforms(
+        self,
+        phases: Union[str, List[str]],
+        transforms: List[Optional[Tuple[Type[Callable], Dict[str, Any]]]],
+    ) -> None:
+        """
+        Adds a list of transforms to the specified phase(s) (either "train",
+        "eval", or both).
+
+        Args:
+            phases (Union[str, List[str]]): The phase(s) to which the
+            transforms should be added. Should be either "train", "eval", or
+            both.
+            transforms (List[Tuple[Type[Transform], Dict[str, Any]]]): A list
+            of tuples, each containing a transform and its parameters.
+        """
+        # If phases is a string, convert it to a list
+        if isinstance(phases, str):
+            phases = [phases]
+
+        # Filter out None values before extending the list
+        for phase in phases:
+            for transform, params in filter(None, transforms):
+                if "torchvision.transforms" not in transform.__module__:
+                    raise ValueError(
+                        f"Transform {transform} is not a torchvision transform."
+                    )
+            self.transforms[phase].extend(filter(None, transforms))
+
+    def build(self) -> Dict[str, Compose]:
+        """
+        Builds and returns the final Compose transforms for each phase.
+
+        Returns:
+            Dict[str, Transform]: A dictionary containing the Compose
+            transforms for each phase.
+        """
+        return {
+            phase: Compose(
+                [transform(**params) for transform, params in self.transforms[phase]]
+            )
+            for phase in ["train", "eval"]
+        }
 
 
 class MetricLogger(object):
@@ -364,10 +520,10 @@ def parse_configargparse_args(params_file):
 def timestamp():
     return time.strftime("%Y%m%d-%H%M%S")
 
+
 def get_batch_creds(session, role_arn):
     sts = session.client("sts")
     response = sts.assume_role(
-        RoleArn=role_arn,
-        RoleSessionName=f"fpe-sagemaker-session--{timestamp()}"
+        RoleArn=role_arn, RoleSessionName=f"fpe-sagemaker-session--{timestamp()}"
     )
-    return response['Credentials']
+    return response["Credentials"]
