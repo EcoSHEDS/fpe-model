@@ -40,10 +40,10 @@ parser <- add_option(
 if (interactive()) {
   cmd_args <- c(
     "--directory=/mnt/d/fpe/rank",
-    "--station-id=10",
+    "--station-id=81",
     "--variable-id=FLOW_CFS",
     "--overwrite",
-    "RANK-FLOW-20240327"
+    "RANK-FLOW-20240613"
   )
 } else {
   cmd_args <- commandArgs(trailingOnly = TRUE)
@@ -365,7 +365,8 @@ annotations <- annotations_raw %>%
         )
     })
   ) %>%
-  unnest(data)
+  unnest(data) %>%
+  filter(!is.na(left.url), !is.na(right.url))
 
 stopifnot(
   all(!is.na(annotations$left.url)),
