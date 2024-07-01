@@ -47,7 +47,7 @@ class FPEDataset(Dataset):
                 target and transforms it.
         """
         self.root = root
-        self.data = pd.read_csv(os.path.join(root, data_file))
+        self.data = pd.read_csv(os.path.abspath(os.path.join(root, data_file)))
         with open(os.path.join(root, station_file)) as f:
             self.station = json.load(f)
         self.col_timestamp = col_timestamp
@@ -229,6 +229,17 @@ class FPERankingPairsDataset(FPEDataset):
             transform=transform,
             label_transform=label_transform,
         )
+        # double the dataset by duplicating the rows and swapping the left and right images
+        flipped_data = self.data.copy()
+        flipped_data[self.col_timestamp_1] = self.data[self.col_timestamp_2]
+        flipped_data[self.col_timestamp_2] = self.data[self.col_timestamp_1]
+        flipped_data[self.col_filename_1] = self.data[self.col_filename_2]
+        flipped_data[self.col_filename_2] = self.data[self.col_filename_1]
+        flipped_data[self.col_value_1] = self.data[self.col_value_2]
+        flipped_data[self.col_value_2] = self.data[self.col_value_1]
+        # for label, 1 changes to -1, 0 remains the same, and -1 changes to 1
+        flipped_data[self.col_label] = -self.data[self.col_label]
+        self.data = pd.concat([self.data, flipped_data], ignore_index=True)
 
     def convert_timezone(self) -> None:
         """

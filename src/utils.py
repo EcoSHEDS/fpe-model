@@ -1,4 +1,5 @@
 import argparse
+import os
 import random
 import time
 from typing import Any, Callable, Dict, List, Optional, Tuple, Type, Union
@@ -62,6 +63,33 @@ class ArgumentBuilder:
     def __init__(self) -> None:
         self.parser = argparse.ArgumentParser()
 
+    def add_path_args(self):
+        self.parser.add_argument(
+            "--images-dir",
+            type=str,
+            default=os.environ.get("SM_CHANNEL_IMAGES", "./data"),
+            help="Path to input images",
+        )
+        self.parser.add_argument(
+            "--pairs-file",
+            type=str,
+            default="pairs.csv",
+            help="Path to input pairs file",
+        )
+        self.parser.add_argument(
+            "--output-dir",
+            type=str,
+            default=os.environ.get("SM_OUTPUT_DIR", "./output"),
+            help="Path to save output files",
+        )
+        self.parser.add_argument(
+            "--model-dir",
+            type=str,
+            default=os.environ.get("SM_MODEL_DIR", "./model"),
+            help="Path to save model files",
+        )
+        return self
+
     def add_resource_args(self):
         self.parser.add_argument(
             "--gpu", type=int, default=0, help="GPU device to use for training"
@@ -69,7 +97,7 @@ class ArgumentBuilder:
         self.parser.add_argument(
             "--num-workers",
             type=int,
-            default=4,
+            default=12,
             help="Number of workers for data loaders",
         )
         self.parser.add_argument(
@@ -83,7 +111,7 @@ class ArgumentBuilder:
         self.parser.add_argument(
             "--epochs",
             type=int,
-            default=15,
+            default=25,
             help="Number of epochs to train the model",
         )
         self.parser.add_argument(
@@ -107,6 +135,7 @@ class ArgumentBuilder:
             default=2,
             help="Number of epochs after which to unfreeze model backbone",
         )
+        return self
 
     def add_transform_args(self):
         self.parser.add_argument(
@@ -230,6 +259,193 @@ class MetricLogger(object):
         self.count += n
         self.sum += val * n
         self.avg = self.sum / self.count
+
+
+class Trainer:
+    """A class for training a PyTorch model.
+
+    This class provides methods for training a PyTorch model, validating it,
+    and saving checkpoints.
+
+    Attributes:
+        model (torch.nn.Module): The PyTorch model to train.
+        criterion (torch.nn.Module): The loss function.
+        validation_metrics (List[torch.nn.Module]): A list of metrics for validation.
+        optimizer (torch.optim.Optimizer): The optimizer to use for training.
+        device (Union[str, torch.device]): The device to train on.
+        scheduler (Optional[torch.optim.lr_scheduler._LRScheduler], default=None): The learning rate scheduler.
+        checkpoint_dir (str, default='.'): The directory to save checkpoints in.
+        best_val_metric (Optional[str], default=None): The name of the best validation metric.
+        best_val_metric_mode (str, default='min'): The mode of the best validation metric ('min' or 'max').
+        best_val_performance (float, default=float('inf') or -float('inf')): The best validation performance so far.
+        transforms (Optional[Dict[str, torchvision.transforms.Compose]], default=None): A dictionary of transforms for the dataset.
+    """
+
+    def __init__(
+        self,
+        model: torch.nn.Module,
+        criterion: torch.nn.Module,
+        validation_metrics: List[torch.nn.Module],
+        optimizer: torch.optim.Optimizer,
+        device: Union[str, torch.device],
+        scheduler: Optional[torch.optim.lr_scheduler._LRScheduler] = None,
+        checkpoint_dir: str = ".",
+        best_val_metric: Optional[str] = None,
+        best_val_metric_mode: str = "min",
+        transforms: Optional[Dict[str, Compose]] = None,
+        transforms_params: Dict[str, Union[float, List[int], List[float]]] = None,
+    ):
+        self.model = model
+        self.criterion = criterion
+        self.validation_metrics = validation_metrics
+        self.optimizer = optimizer
+        self.scheduler = scheduler
+        self.device = device
+        self.checkpoint_dir = checkpoint_dir
+        self.model.to(self.device)
+        self.best_val_metric = (
+            best_val_metric if best_val_metric else criterion.__class__.__name__
+        )
+        self.best_val_metric_mode = best_val_metric_mode
+        self.best_val_performance = (
+            float("inf") if best_val_metric_mode == "min" else -float("inf")
+        )
+        self.transforms = transforms
+        self.params = transforms_params
+
+    def train_one_epoch(self, train_dataloader, epoch):
+        self.model.train()
+        loss_logger = MetricLogger()
+        start_time = time.time()
+        for bidx, batch in tqdm(
+            enumerate(train_dataloader),
+            total=len(train_dataloader),
+            desc=f"Epoch {epoch}",
+        ):
+            self.optimizer.zero_grad()
+            loss = self.training_step(batch, bidx)
+            loss.backward()
+            self.optimizer.step()
+            loss_logger.update(loss.item())
+        avg_loss = loss_logger.avg
+        end_time = time.time()
+        total_time = end_time - start_time
+
+        # Save the last model
+        self.save_checkpoint(epoch, "last.ckpt")
+
+        return avg_loss, total_time
+
+    def validate(self, val_dataloader, epoch):
+        self.model.eval()
+        metrics_logger = {
+            metric.__class__.__name__: MetricLogger()
+            for metric in self.validation_metrics
+        }
+        start_time = time.time()
+
+        with torch.no_grad():
+            for bidx, batch in tqdm(
+                enumerate(val_dataloader),
+                total=len(val_dataloader),
+                desc=f"Validation {epoch}",
+            ):
+                metrics = self.validation_step(batch, bidx)
+
+                for metric, value in metrics.items():
+                    metrics_logger[metric].update(value)
+
+        avg_metrics = {metric: logger.avg for metric, logger in metrics_logger.items()}
+        end_time = time.time()
+        total_time = end_time - start_time
+
+        # Check if this is the best performance so far
+        is_best = (
+            self.best_val_metric_mode == "min"
+            and avg_metrics[self.best_val_metric] < self.best_val_performance
+        ) or (
+            self.best_val_metric_mode == "max"
+            and avg_metrics[self.best_val_metric] > self.best_val_performance
+        )
+        if is_best:
+            self.best_val_performance = avg_metrics[self.best_val_metric]
+            # Save the model
+            self.save_checkpoint(epoch, "best_model.ckpt")
+
+        return avg_metrics, total_time
+
+    def training_step(self, batch, batch_idx):
+        if len(batch) == 3:
+            inputs1, inputs2, labels = batch
+            inputs1, inputs2, labels = (
+                inputs1.to(self.device),
+                inputs2.to(self.device),
+                labels.to(self.device),
+            )
+            outputs1, outputs2 = self.model(inputs1, inputs2)
+            loss = self.criterion(outputs1, outputs2, labels)
+        else:
+            inputs, targets = batch
+            inputs, targets = inputs.to(self.device), targets.to(self.device)
+            outputs = self.model(inputs)
+            loss = self.criterion(outputs, targets)
+        return loss
+
+    def validation_step(self, batch, batch_idx):
+        if len(batch) == 3:
+            inputs1, inputs2, labels = batch
+            inputs1, inputs2, labels = (
+                inputs1.to(self.device),
+                inputs2.to(self.device),
+                labels.to(self.device),
+            )
+            outputs1, outputs2 = self.model(inputs1, inputs2)
+            metrics = {
+                metric.__class__.__name__: metric(outputs1, outputs2, labels).item()
+                for metric in self.validation_metrics
+            }
+        else:
+            inputs, targets = batch
+            inputs, targets = inputs.to(self.device), targets.to(self.device)
+            outputs = self.model(inputs)
+            metrics = {
+                metric.__class__.__name__: metric(outputs, targets).item()
+                for metric in self.validation_metrics
+            }
+        return metrics
+
+    def save_checkpoint(self, epoch, filename):
+        # If the model is an instance of DataParallel, save the module attribute
+        model_state_dict = (
+            self.model.module.state_dict()
+            if isinstance(self.model, torch.nn.DataParallel)
+            else self.model.state_dict()
+        )
+
+        torch.save(
+            {
+                "epoch": epoch,
+                "model_state_dict": model_state_dict,
+                "optimizer_state_dict": self.optimizer.state_dict(),
+                "scheduler_state_dict": (
+                    self.scheduler.state_dict() if self.scheduler is not None else None
+                ),
+                "transforms": self.transforms,
+                "params": self.params,
+            },
+            os.path.join(self.checkpoint_dir, filename),
+        )
+
+    def load_checkpoint(self, path):
+        checkpoint = torch.load(path)
+        self.model.load_state_dict(checkpoint["model_state_dict"])
+        self.optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+        if (
+            self.scheduler is not None
+            and checkpoint["scheduler_state_dict"] is not None
+        ):
+            self.scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
+        return checkpoint["epoch"]
 
 
 class Accuracy(torch.nn.Module):

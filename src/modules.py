@@ -5,7 +5,7 @@
 import numpy as np
 import torch
 import torch.nn as nn
-from torchvision.models import resnet18, resnet50
+from torchvision.models import ResNet18_Weights, ResNet50_Weights, resnet18, resnet50
 
 from src.utils import get_output_shape
 
@@ -19,7 +19,8 @@ class ResNet18(nn.Module):
 
     def __init__(self, pretrained=True, truncate=0):
         super(ResNet18, self).__init__()
-        self.model = resnet18(pretrained=pretrained)
+        weights = ResNet18_Weights.DEFAULT if pretrained else None
+        self.model = resnet18(weights=weights)
         if truncate > 0:
             self.model = nn.Sequential(*list(self.model.children())[:-truncate])
 
@@ -39,7 +40,8 @@ class ResNet50(nn.Module):
 
     def __init__(self, pretrained=True, truncate=0):
         super(ResNet50, self).__init__()
-        self.model = resnet50(pretrained=pretrained)
+        weights = ResNet50_Weights.DEFAULT if pretrained else None
+        self.model = resnet50(weights=weights)
         if truncate > 0:
             self.model = nn.Sequential(*list(self.model.children())[:-truncate])
 
