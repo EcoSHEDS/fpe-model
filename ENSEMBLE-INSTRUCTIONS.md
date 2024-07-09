@@ -64,13 +64,13 @@ git clone https://github.com/EcoSHEDS/fpe-model.git
 
 Importing a development dataset involves two steps:
 
-1. Importing metadata into the PostgreSQL database (`db-fpe`) using the [knex seed utility](https://knexjs.org/guide/migrations.html#seed-cli).
+1. Importing metadata into the PostgreSQL database (`db-fpe`) using [knex migrations](https://knexjs.org/guide/migrations.html) and the [knex seed utility](https://knexjs.org/guide/migrations.html#seed-cli).
 
 ```sh
 # download and extract fpe dataset to db/seeds/development
-cd fpe/db/seeds/development/data/
-wget https://example.com/fpe-dataset-20240708.tar.gz
-tar -xzvf fpe-dataset-20240708.tar.gz
+cd fpe/db/seeds/development/data/users/d72c3799-4ca0-48cf-9d43-145a95d45bd9/stations
+wget https://example.com/fpe-WESTB0-20240709.tar.gz # real URL will be emailed to you
+tar -xzf fpe-WESTB0-20240709.tar.gz # should create WESTB0/ folder containing db/ and storage/ subfolders
 
 # check that the dataset is correctly extracted into this structure:
 
@@ -92,7 +92,12 @@ tar -xzvf fpe-dataset-20240708.tar.gz
 
 cd ../../.. # back to fpe/db
 export NODE_ENV=development
-knex seed:run # loads all data in ./development/data into the PostgreSQL database
+
+# run migrations to set up db schema
+knex migrate:latest
+
+# run seeds to import data from ./development/data
+knex seed:run
 ```
 
 2. Uploading image files to the S3 storage bucket (`s3-storage`) using `aws` CLI. This needs to be repeated for each station
@@ -100,9 +105,11 @@ knex seed:run # loads all data in ./development/data into the PostgreSQL databas
 ```sh
 cd fpe/db/seeds/development/data/users/d72c3799-4ca0-48cf-9d43-145a95d45bd9/stations
 
-aws sync WESTB0/storage/ s3://my-fpe-s3-storage/ # uploads imagesets/ and annotations/
+aws sync WESTB0/storage/ s3://my-fpe-s3-storage/ # uploads imagesets/ and annotations/ to s3-storage
 
 # note: in s3, the data are *not* grouped by station
+# so imagesets should be saved to s3://my-fpe-s3-storage/imagesets/<uuid>
+# and annotations should be saved to s3://my-fpe-s3-storage/annotations/<uuid>.json
 ```
 
 At this point, the PostgreSQL database should be populated with data, and the associated images available in the S3 storage bucket.
