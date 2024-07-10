@@ -64,33 +64,65 @@ git clone https://github.com/EcoSHEDS/fpe-model.git
 
 Importing a development dataset involves two steps:
 
-1. Importing metadata into the PostgreSQL database (`db-fpe`) using [knex migrations](https://knexjs.org/guide/migrations.html) and the [knex seed utility](https://knexjs.org/guide/migrations.html#seed-cli).
+1. Importing data into the PostgreSQL database (`db-fpe`) using [knex migrations](https://knexjs.org/guide/migrations.html) and the [knex seed utility](https://knexjs.org/guide/migrations.html#seed-cli).
 
 ```sh
 # download and extract fpe dataset to db/seeds/development
-cd fpe/db/seeds/development/data/users/d72c3799-4ca0-48cf-9d43-145a95d45bd9/stations
-wget https://example.com/fpe-WESTB0-20240709.tar.gz # real URL will be emailed to you
-tar -xzf fpe-WESTB0-20240709.tar.gz # should create WESTB0/ folder containing db/ and storage/ subfolders
+cd ~/fpe/db/seeds/development/data/users/d72c3799-4ca0-48cf-9d43-145a95d45bd9/stations
+wget https://example.com/WESTB0-20220201-20230131-20240710.tar.gz # real URL will be emailed to you
+tar -xzf WESTB0-20220201-20230131-20240710.tar.gz # should create WESTB0-20220201-20230131/ folder containing db/ and storage/ subfolders
+rm WESTB0-20220201-20230131-20240710.tar.gz # delete after extraction
 
-# check that the dataset is correctly extracted into this structure:
+# create directory for imagesets
+cd WESTB0-20220201-20230131
+mkdir -p storage/imagesets/
+cd storage/imagesets/
 
+# download imageset tarballs from s3
+for UUID in $(ls ../../db/imagesets/); do wget https://usgs-chs-conte-prod-fpe-storage.s3.amazonaws.com/seeds/imagesets/${UUID}.tar.gz; done
+
+# extract tarballs
+for FILE in *.tar.gz; do tar -xzvf $FILE; done
+
+# delete tarballs
+rm *.tar.gz
+
+# check that the dataset and images are correctly extracted into this structure:
 # ./fpe/db/seeds/development/data/
 # ├── modelTypes.json
 # ├── users
 # │   └── d72c3799-4ca0-48cf-9d43-145a95d45bd9
 # │       ├── stations
-# │       │   └── WESTB0
+# │       │   └── WESTB0-20220201-20230131
 # │       │       ├── db
+# │       │       │   ├── annotations.json
 # │       │       │   ├── imagesets
+# │       │       │   │   ├── 265292ae-007e-4a94-a86c-e01028d85c1f
+# │       │       │   │   │   ├── images.json
+# │       │       │   │   │   └── imageset.json
+# │       │       │   │   └── ...
 # │       │       │   └── station.json
 # │       │       └── storage
 # │       │           ├── annotations
-# │       │           ├── imagesets
-# │       │           └── models
+# │       │           │   ├── 0406f678-d037-4090-8c3e-411d33c258b4.json
+# │       │           │   └── ...
+# │       │           └── imagesets
+# │       │               ├── 265292ae-007e-4a94-a86c-e01028d85c1f
+# │       │               │   ├── images
+# │       │               │   │   ├── West Brook 0__2022-12-20__09-54-55(1).JPG
+# │       │               │   │   └── ...
+# │       │               │   ├── pii.json
+# │       │               │   └── thumbs
+# │       │               │       ├── West Brook 0__2022-12-20__09-54-55(1).JPG
+# │       │               │       └── ...
+# │       │               └── ...
 # │       └── user.json
 # └── variables.json
 
-cd ../../.. # back to fpe/db
+# go back to ./db folder in fpe repo
+cd ~/fpe/db
+
+# set environment so creds are loaded from .env.development.local
 export NODE_ENV=development
 
 # run migrations to set up db schema
@@ -100,12 +132,13 @@ knex migrate:latest
 knex seed:run
 ```
 
-2. Uploading image files to the S3 storage bucket (`s3-storage`) using `aws` CLI. This needs to be repeated for each station
+2. Uploading image files to the S3 storage bucket (`s3-storage`) using `aws` CLI.
 
 ```sh
-cd fpe/db/seeds/development/data/users/d72c3799-4ca0-48cf-9d43-145a95d45bd9/stations
+cd ~/fpe/db/seeds/development/data/users/d72c3799-4ca0-48cf-9d43-145a95d45bd9/stations
 
-aws sync WESTB0/storage/ s3://my-fpe-s3-storage/ # uploads imagesets/ and annotations/ to s3-storage
+# upload everything in the storage/ folder to the s3 bucket
+aws sync WESTB0-20220201-20230131/storage/ s3://my-fpe-s3-storage/ # uploads imagesets/ and annotations/ to s3-storage
 
 # note: in s3, the data are *not* grouped by station
 # so imagesets should be saved to s3://my-fpe-s3-storage/imagesets/<uuid>
