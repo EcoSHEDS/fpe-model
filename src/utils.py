@@ -111,7 +111,7 @@ class ArgumentBuilder:
         self.parser.add_argument(
             "--epochs",
             type=int,
-            default=25,
+            default=50,
             help="Number of epochs to train the model",
         )
         self.parser.add_argument(
