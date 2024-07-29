@@ -85,7 +85,7 @@ class RankNetModule(pl.LightningModule):
                 prog_bar=True,
             )
         return loss
-    
+
     def predict_step(self, batch, batch_idx, dataloader_idx=None):
         x, y = batch
         y_hat = self.model.forward_single(x)
@@ -95,10 +95,10 @@ class RankNetModule(pl.LightningModule):
         # Option 1: Keep initially trainable parameters and unfrozen parameters separate
         # initially_trainable_params = [p for p in self.model.parameters() if p.requires_grad]
         # self.optimizer = SGD(initially_trainable_params, lr=self.lr, momentum=0.9)
-        
+
         # Option 2: Keep all parameters in the same optimizer
         self.optimizer = SGD(self.model.parameters(), lr=self.lr, momentum=0.9)
-        
+
         # NOTE: ReduceLROnPlateau might work only with a single learning rate across all parameter groups
         self.scheduler = ReduceLROnPlateau(
             self.optimizer, "min", patience=1, factor=0.5
@@ -111,8 +111,11 @@ class RankNetModule(pl.LightningModule):
 
     def on_validation_epoch_end(self):
         # If we've trained for unfreeze_after epochs and unfreeze_after > 0, unfreeze the specified layers
-        print(f'Current epoch: {self.current_epoch + 1}, unfreeze_after: {self.unfreeze_after}')
+        print(
+            f"Current epoch: {self.current_epoch}, unfreeze_after: {self.unfreeze_after}"
+        )
         if self.unfreeze_after > 0 and self.current_epoch + 1 == self.unfreeze_after:
+            print("Unfreezing specified layers")
             unfrozen_params = []
             for name, module in self.model.named_modules():
                 if name in self.freeze_layers:
@@ -127,7 +130,7 @@ class RankNetModule(pl.LightningModule):
             # )
 
             # Option 2: If we kept all parameters in the same optimizer, don't do anything
-            
+
 
 class LossLoggingCallback(pl.Callback):
     def __init__(self, filepath):
@@ -136,21 +139,21 @@ class LossLoggingCallback(pl.Callback):
         self.losses = {"train_loss": [], "val_loss": [], "test_loss": None}
 
     def on_train_epoch_end(self, trainer, pl_module):
-        if 'train_loss' in trainer.logged_metrics:
-            train_loss = trainer.logged_metrics['train_loss'].item()
-            self.losses['train_loss'].append((trainer.current_epoch, train_loss))        
+        if "train_loss" in trainer.logged_metrics:
+            train_loss = trainer.logged_metrics["train_loss"].item()
+            self.losses["train_loss"].append((trainer.current_epoch, train_loss))
         self.save_losses()
 
     def on_validation_epoch_end(self, trainer, pl_module):
-        if 'val_loss' in trainer.logged_metrics:
-            val_loss = trainer.logged_metrics['val_loss'].item()
-            self.losses['val_loss'].append((trainer.current_epoch, val_loss))
+        if "val_loss" in trainer.logged_metrics:
+            val_loss = trainer.logged_metrics["val_loss"].item()
+            self.losses["val_loss"].append((trainer.current_epoch, val_loss))
         self.save_losses()
-    
+
     def on_test_epoch_end(self, trainer, pl_module):
-        if 'test_loss' in trainer.logged_metrics:
-            test_loss = trainer.logged_metrics['test_loss'].item()
-            self.losses['test_loss'] = test_loss
+        if "test_loss" in trainer.logged_metrics:
+            test_loss = trainer.logged_metrics["test_loss"].item()
+            self.losses["test_loss"] = test_loss
         self.save_losses()
 
     def save_losses(self):
