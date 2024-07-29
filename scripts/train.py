@@ -201,28 +201,31 @@ def train(args):
         unfreeze_after=args.unfreeze_after,
     )
 
-    early_stop_callback = EarlyStopping(
-        monitor="val_loss", patience=3, mode="min", verbose=True
-    )
+    # early_stop_callback = EarlyStopping(
+    #     monitor="val_loss", patience=3, mode="min", verbose=True
+    # )
     metrics_logging_save_path = os.path.join(args.output_dir, "losses.pkl")
     metrics_logging_callback = LossLoggingCallback(filepath=metrics_logging_save_path)
     checkpoint_callback = ModelCheckpoint(
         monitor="val_loss",
         dirpath=args.model_dir,
         filename="best-checkpoint-{epoch:02d}-{val_loss:.2f}",
-        save_top_k=1,
         mode="min",
-        save_last=True,  # Save the model after each epoch
+        every_n_epochs=2,
+        save_top_k=1,  # Save the best model
+        save_last=True,  # Save the last model
         verbose=True,
     )
 
     csv_logger = loggers.CSVLogger(args.output_dir, name="logs")
+    tb_logger = loggers.TensorBoardLogger(args.output_dir, name="logs")
 
     trainer = Trainer(
         max_epochs=args.epochs,
-        callbacks=[early_stop_callback, metrics_logging_callback, checkpoint_callback],
+        # callbacks=[early_stop_callback, metrics_logging_callback, checkpoint_callback],
+        callbacks=[metrics_logging_callback, checkpoint_callback],
         devices=[args.gpu],
-        logger=csv_logger,
+        logger=[csv_logger, tb_logger],
         # fast_dev_run=True, # NOTE: COMMENT OUT FOR FULL TRAINING
     )
     trainer.fit(module, train_dl, val_dl)
@@ -230,13 +233,12 @@ def train(args):
         trainer.test(module, test_dl, ckpt_path="best")
 
     # predict
-    max_workers = max(1, os.cpu_count() - 1)
     predict_ds = FPEDataset(args.images_dir, transform=img_tf["eval"])
     predict_dl = DataLoader(
         predict_ds,
-        batch_size=args.batch_size * 2,
+        batch_size=args.batch_size,
         shuffle=False,
-        num_workers=max_workers,
+        num_workers=args.num_workers,
     )
     print(f"predicting on {len(predict_ds)} images over {len(predict_dl)} batches")
     predictions = trainer.predict(module, predict_dl)
