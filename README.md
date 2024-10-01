@@ -1,18 +1,18 @@
-# Flow Photo RankNet Model
-
-An [EcoSHEDS](https://www.usgs.gov/apps/ecosheds/) Project
-
-:bangbang: **WARNING**: this repo is under heavy development. Use at your own risk.
+# USGS Flow Photo Explorer Model
 
 ## Background
 
 This repo contains the source code for a deep learning model designed to estimate streamflow (or other hydrologic metrics) using timelapse imagery. This model is integrated into the [EcoSHEDS Flow Photo Explorer](https://www.usgs.gov/apps/ecosheds/fpe/).
 
-Original development of this model was completed by Amrita Gupta at [Microsoft AI For Good Lab](https://www.microsoft.com/en-us/research/group/ai-for-good-research-lab/) and Tony Chang at [Conservation Science Partners](https://www.csp-inc.org/) with funding from the U.S. Geological Survey and the National Geographic Society.
+Initial development of this model was completed by Amrita Gupta at [Microsoft AI For Good Lab](https://www.microsoft.com/en-us/research/group/ai-for-good-research-lab/) and Tony Chang at [Conservation Science Partners](https://www.csp-inc.org/) with funding from the U.S. Geological Survey and the National Geographic Society.
 
 Preliminary research and model development can be found in:
 
 > Gupta, A., Chang, T., Walker, J., and Letcher, B. (2022). *Towards Continuous Streamflow Monitoring with Time-Lapse Cameras and Deep Learning.* In ACM SIGCAS/SIGCHI Conference on Computing and Sustainable Societies (COMPASS) (COMPASS '22). Association for Computing Machinery, New York, NY, USA, 353–363. https://doi.org/10.1145/3530190.3534805
+
+The model was then operationalized for training and inference using AWS SageMaker by Jeff Walker at [Walker Environmental Research](https://walkerenvres.com).
+
+Ongoing model development is continuing with contributions from Amrita Gupta [Microsoft AI For Good Lab](https://www.microsoft.com/en-us/research/group/ai-for-good-research-lab/) and Jeff Walker at [Walker Environmental Research](https://walkerenvres.com) as part of the USGS EcoSHEDS project.
 
 ## Python Environment
 
