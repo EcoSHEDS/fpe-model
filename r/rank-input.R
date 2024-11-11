@@ -87,12 +87,12 @@ parser <- add_option(
 if (interactive()) {
   cmd_args <- c(
     "--directory=/mnt/d/fpe/rank",
-    "--station-id=29",
+    "--station-id=178",
     "--variable-id=FLOW_CFS",
     "--overwrite",
-    "--dataset-code=RANK-FLOW-20240402",
-    "--annotations-end=2023-09-30",
-    "RANK-FLOW-20240402"
+    "--dataset-code=RANK-FLOW-20240613",
+    #"--annotations-end=2023-09-30",
+    "RANK-FLOW-20240613"
   )
 } else {
   cmd_args <- commandArgs(trailingOnly = TRUE)
@@ -168,7 +168,7 @@ log_info("input_dir: {input_dir}")
 
 # functions ---------------------------------------------------------------
 
-split_pairs <- function (x, train_frac = 0.8, seed = NULL) {
+split_pairs_graph <- function (x, train_frac = 0.8, seed = NULL) {
   pairs <- x %>%
     transmute(
       pair = row_number(),
@@ -241,9 +241,48 @@ split_pairs <- function (x, train_frac = 0.8, seed = NULL) {
   )
 }
 
+split_pairs_random <- function (x, train_frac = 0.8, seed = NULL) {
+  pairs <- x %>%
+    transmute(
+      pair = row_number(),
+      image_id_1 = left.imageId,
+      timestamp_1 = left.timestamp,
+      filename_1 = left.filename,
+      value_1 = left.value,
+      image_id_2 = right.imageId,
+      timestamp_2 = right.timestamp,
+      filename_2 = right.filename,
+      value_2 = right.value,
+      label = case_when(
+        rank == "SAME" ~ 0,
+        rank == "LEFT" ~ 1,
+        rank == "RIGHT" ~ -1
+      )
+    )
+
+  if (!is.null(seed)) {
+    log_info('setting seed ({seed})')
+    set.seed(seed)
+  }
+
+  pairs_train <- pairs %>%
+    sample_frac(size = train_frac)
+
+  pairs_val <- pairs %>%
+    filter(!pair %in% pairs_train$pair)
+
+  stopifnot(length(base::intersect(pairs_train$pair, pairs_val$pair)) == 0)
+
+  bind_rows(
+    train = pairs_train,
+    val = pairs_val,
+    .id = "split"
+  )
+}
+
 duplicate_pairs <- function (x) {
   x_dup <- bind_cols(
-    select(x, pair),
+    select(x, split, pair),
     select(x, ends_with("_2")) %>%
       rename_with(~ str_replace(., "2", "1")),
     select(x, ends_with("_1")) %>%
@@ -297,8 +336,35 @@ annotations <- annotations_total %>%
   )
 log_info("annotations: n={scales::comma(nrow(annotations))} ({scales::percent(nrow(annotations)/nrow(annotations_total), accuracy = 1)} of {scales::comma(nrow(annotations_total))} total)")
 
-log_info("annotations: splitting")
-pairs <- split_pairs(annotations, train_frac, seed)
+test_in_dates <- range(as_date(c(annotations$left.timestamp, annotations$right.timestamp)))
+log_info("test_in_dates: {str_c(test_in_dates, collapse=', ')}")
+
+log_info("annotations: splitting using graph method")
+split_method <- "graph"
+pairs <- split_pairs_graph(annotations, train_frac, seed)
+pairs_train_frac <- mean(pairs$split == "train")
+
+if (abs(pairs_train_frac - train_frac) > 0.05) {
+  log_info("annotations: train split fraction ({scales::percent(pairs_train_frac, accuracy = 0.1)}) deviates from target ({scales::percent(train_frac, accuracy = 0.1)}) by more than 5%, splitting randomly")
+  split_method <- "random"
+  pairs <- split_pairs_random(annotations, train_frac, seed)
+  pairs_train_frac <- mean(pairs$split == "train")
+}
+
+# check for image leakage between train and val (same image in both splits)
+pairs_n_leakage <- pairs %>%
+  select(split, starts_with("image_id")) %>%
+  pivot_longer(-split) %>%
+  select(-name) %>%
+  distinct() %>%
+  count(value) %>%
+  filter(n > 1) %>%
+  nrow()
+pairs_n_images <- length(unique(pairs$image_id_1, pairs$image_id_2))
+
+if (pairs_n_leakage > 0) {
+  log_warn("annotations: {pairs_n_leakage} of {pairs_n_images} images ({scales::percent(pairs_n_leakage/pairs_n_images, accuracy = 0.1)}) leaked between train and val splits")
+}
 
 n_pairs_train <- sum(pairs$split == "train")
 n_pairs_val <- sum(pairs$split == "val")
@@ -306,15 +372,22 @@ n_pairs_total <- n_pairs_train + n_pairs_val
 log_info("pairs(train): n={scales::comma(n_pairs_train)} ({scales::percent(n_pairs_train/n_pairs_total, accuracy = 1)})")
 log_info("pairs(val): n={scales::comma(n_pairs_val)} ({scales::percent(n_pairs_val/n_pairs_total, accuracy = 1)})")
 
-# ensure no data leakage
-pairs_train <- pairs %>%
-  filter(split == "train")
-train_image_ids <- c(pairs_train$image_id_1, pairs_train$image_id_2)
-pairs_val <- pairs %>%
-  filter(split == "val")
-val_image_ids <- c(pairs_val$image_id_1, pairs_val$image_id_2)
 
-stopifnot(length(intersect(train_image_ids, val_image_ids)) == 0)
+stopifnot(
+  abs(pairs_train_frac - train_frac) <= 0.05,
+  n_pairs_train > 100,
+  n_pairs_val > 10
+)
+
+# ensure no data leakage (only when using graph split)
+# pairs_train <- pairs %>%
+#   filter(split == "train")
+# train_image_ids <- c(pairs_train$image_id_1, pairs_train$image_id_2)
+# pairs_val <- pairs %>%
+#   filter(split == "val")
+# val_image_ids <- c(pairs_val$image_id_1, pairs_val$image_id_2)
+#
+# stopifnot(length(intersect(train_image_ids, val_image_ids)) == 0)
 
 # export ------------------------------------------------------------------
 
@@ -342,7 +415,7 @@ images_split <- images %>%
     split = case_when(
       image_id %in% c(image_ids_train) ~ "train",
       image_id %in% c(image_ids_val) ~ "val",
-      as_date(timestamp) <= annotations_dates[2] & as_date(timestamp) >= annotations_dates[1] ~ "test-in",
+      as_date(timestamp) <= test_in_dates[2] & as_date(timestamp) >= test_in_dates[1] ~ "test-in",
       TRUE ~ "test-out"
     ),
     split = factor(split, levels = c("train", "val", "test-in", "test-out"))
@@ -424,7 +497,7 @@ if (sum(!is.na(images_split$value)) > 0) {
 annotations %>%
   write_csv(file.path(input_dir, "annotations.csv"))
 
-pairs %>%
+duplicate_pairs(pairs) %>%
   write_csv(file.path(input_dir, "pairs.csv"))
 
 p <- pairs %>%
@@ -539,6 +612,7 @@ list(
   pairs = list(
     source = "human",
     n = nrow(pairs),
+    method = split_method,
     start = format_ISO8601(
       min(c(pairs$timestamp_1, pairs$timestamp_2)),
       usetz = TRUE

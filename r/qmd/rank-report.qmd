@@ -8,8 +8,8 @@ format:
     self-contained: true
 params:
   directory: "/mnt/d/fpe/rank"
-  station_id: 29
-  model_code: "RANK-FLOW-20240403"
+  station_id: 11
+  model_code: "RANK-FLOW-20240613"
 editor_options: 
   chunk_output_type: console
 ---
@@ -27,8 +27,8 @@ knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE, fig.width 
 
 # params <- list(
 #   directory = "/mnt/d/fpe/rank",
-#   station_id = 29,
-#   model_code = "RANK-FLOW-20240410"
+#   station_id = 46,
+#   model_code = "RANK-FLOW-20240613"
 # )
 
 station_dir <- file.path(params$directory, params$station_id)
@@ -109,10 +109,12 @@ predictions <- predictions %>%
   )
 
 predictions_day <- predictions %>%
-  filter(!is.na(score), !is.na(value)) %>% 
-  group_by(split, date) %>%
+  filter(!is.na(score)) %>% 
+  arrange(date, split) %>% 
+  group_by(date) %>%
   summarise(
-    value = mean(value),
+    split = first(split),
+    value = mean(value, na.rm = TRUE),
     score = mean(score),
     .groups = "drop"
   ) %>%
@@ -279,39 +281,43 @@ wrap_plots(p_value, p_splits, ncol = 1, heights = c(0.6, 0.4)) +
 
 
 ```{r images-hist, fig.width=10, fig.height=6}
-images %>%
-  ggplot(aes(value)) +
-  geom_histogram(aes(fill = split)) +
-  scale_fill_brewer("Split", palette = "Set1", labels = split_labels) +
-  scale_x_log10() +
-  facet_wrap(vars(split), labeller = labeller(split = split_labels)) +
-  guides(
-    color = guide_legend(override.aes = list(size = 4, alpha = 1))
-  ) +
-  labs(
-    x = "log10(Flow [cfs])",
-    y = "# Images",
-    title = "Obs. Flow Distributions by Image Split"
-  ) +
-  theme_bw()
+if (any(!is.na(images$value))) {
+  images %>%
+    ggplot(aes(value)) +
+    geom_histogram(aes(fill = split)) +
+    scale_fill_brewer("Split", palette = "Set1", labels = split_labels) +
+    scale_x_log10() +
+    facet_wrap(vars(split), labeller = labeller(split = split_labels)) +
+    guides(
+      color = guide_legend(override.aes = list(size = 4, alpha = 1))
+    ) +
+    labs(
+      x = "log10(Flow [cfs])",
+      y = "# Images",
+      title = "Obs. Flow Distributions by Image Split"
+    ) +
+    theme_bw() 
+}
 ```
 
 ```{r images-cumul, fig.width=10, fig.height=4}
-images %>%
-  ggplot(aes(value)) +
-  stat_ecdf(aes(color = split)) +
-  scale_x_log10() +
-  scale_color_brewer("Split", palette = "Set1", labels = split_labels) +
-  scale_y_continuous(breaks = scales::pretty_breaks(n = 8), labels = scales::percent, expand = expansion()) +
-  guides(
-    color = guide_legend(override.aes = list(size = 4, alpha = 1))
-  ) +
-  labs(
-    x = "log10(Flow [cfs])",
-    y = "Cumul. Frequency (%)",
-    title = "Cumulative Frequency Distribution of Obs. Flow by Image Split"
-  ) +
-  theme_bw()
+if (any(!is.na(images$value))) {
+  images %>%
+    ggplot(aes(value)) +
+    stat_ecdf(aes(color = split)) +
+    scale_x_log10() +
+    scale_color_brewer("Split", palette = "Set1", labels = split_labels) +
+    scale_y_continuous(breaks = scales::pretty_breaks(n = 8), labels = scales::percent, expand = expansion()) +
+    guides(
+      color = guide_legend(override.aes = list(size = 4, alpha = 1))
+    ) +
+    labs(
+      x = "log10(Flow [cfs])",
+      y = "Cumul. Frequency (%)",
+      title = "Cumulative Frequency Distribution of Obs. Flow by Image Split"
+    ) +
+    theme_bw()
+}
 ```
 
 
@@ -394,7 +400,7 @@ metrics %>%
 
 ### Timeseries
 
-```{r ts_value, fig.height=12, fig.width=10}
+```{r ts_value, fig.height=10, fig.width=10}
 p_value <- predictions %>%
   ggplot(aes(timestamp, value)) +
   geom_line() +
@@ -427,22 +433,10 @@ p_rank <- predictions %>%
   theme(
     axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)
   )
-p_z <- predictions %>%
-  filter(!is.na(split)) %>% 
-  ggplot(aes(timestamp)) +
-  geom_line(aes(y = z_obs)) +
-  geom_point(aes(y = z_pred, color = split), size = 0.5, alpha = 0.5) +
-  scale_x_datetime(date_labels = "%b %Y", date_breaks = "2 months", expand = expansion()) +
-  scale_color_brewer("Split", palette = "Set1", labels = split_labels) +
-  labs(x = NULL, y = "Z Score", linetype = NULL) +
-  theme_bw() +
-  theme(
-    axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)
-  )
 
-wrap_plots(p_value, p_score, p_rank, p_z, ncol = 1) +
+wrap_plots(p_value, p_score, p_rank, ncol = 1) +
   plot_layout(guides = "collect") +
-  plot_annotation(title = "Timeseries of Observed Flow, Predited Scores, Percentile Ranks, and Z Scores")
+  plot_annotation(title = "Timeseries of Observed Flow, Predicted Scores, and Percentile Ranks")
 ```
 
 ### Scatter Plots
@@ -487,26 +481,8 @@ p_rank <- predictions %>%
     axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5),
     aspect.ratio = 1
   )
-p_z <- predictions %>%
-  filter(!is.na(split)) %>% 
-  ggplot(aes(z_obs, z_pred)) +
-  geom_point(aes(color = split), size = 0.5, alpha = 0.5) +
-  geom_abline(color = "black", linewidth = 1) +
-  scale_color_brewer("Split", palette = "Set1", labels = split_labels) +
-  labs(
-    x = "Observed Z Score",
-    y = "Predicted Z Score",
-    title = "Obs vs. Pred Z Scores"
-  ) +
-  guides(color = guide_legend(override.aes = list(size = 1))) +
-  facet_wrap(vars(split), ncol = 1, labeller = labeller(split = split_labels)) +
-  theme_bw() +
-  theme(
-    axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5),
-    aspect.ratio = 1
-  )
 if (any(!is.na(predictions$value))) {
-  wrap_plots(p_value, p_rank, p_z, nrow = 1) +
+  wrap_plots(p_value, p_rank, nrow = 1) +
     plot_layout(guides = "collect")
 } else {
   print("No observed data")
@@ -516,23 +492,27 @@ if (any(!is.na(predictions$value))) {
 ### Residuals
 
 ```{r resid_ts}
-predictions %>%
-  filter(!is.na(split)) %>% 
-  ggplot(aes(timestamp, rank_resid)) +
-  geom_hline(yintercept = 0) +
-  geom_point(aes(color = split), size = 0.5, alpha = 0.5) +
-  scale_color_brewer("Split", palette = "Set1", labels = split_labels) +
-  scale_x_datetime(date_labels = "%b %Y", date_breaks = "2 months", expand = expansion()) +
-  scale_y_continuous(breaks = scales::pretty_breaks(n = 8), labels = scales::percent_format(accuracy = 1), expand = expansion()) +
-  guides(color = guide_legend(override.aes = list(size = 1))) +
-  facet_wrap(vars(split), labeller = labeller(split = split_labels)) +
-  labs(
-    x = "Date",
-    y = "Percentile Rank Residual (Obs-Pred)",
-    title = "Timeseries of Percentile Rank Residuals (Obs - Pred)"
-  ) +
-  theme_bw() +
-  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5))
+if (any(!is.na(predictions$value))) {
+  predictions %>%
+    filter(!is.na(split)) %>% 
+    ggplot(aes(timestamp, rank_resid)) +
+    geom_hline(yintercept = 0) +
+    geom_point(aes(color = split), size = 0.5, alpha = 0.5) +
+    scale_color_brewer("Split", palette = "Set1", labels = split_labels) +
+    scale_x_datetime(date_labels = "%b %Y", date_breaks = "2 months", expand = expansion()) +
+    scale_y_continuous(breaks = scales::pretty_breaks(n = 8), labels = scales::percent_format(accuracy = 1), expand = expansion()) +
+    guides(color = guide_legend(override.aes = list(size = 1))) +
+    facet_wrap(vars(split), labeller = labeller(split = split_labels)) +
+    labs(
+      x = "Date",
+      y = "Percentile Rank Residual (Obs-Pred)",
+      title = "Timeseries of Percentile Rank Residuals (Obs - Pred)"
+    ) +
+    theme_bw() +
+    theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5))
+} else {
+  print("No observed data")
+}
 ```
 
 ```{r resid_splot, fig.height = 12}
@@ -593,8 +573,6 @@ p3 <- predictions %>%
 if (any(!is.na(predictions$value))) {
   wrap_plots(p1, p2, p3, nrow = 1) +
     plot_layout(guides = "collect")
-} else {
-  print("No observed data.")
 }
 ```
 
@@ -614,44 +592,67 @@ Performance (Kendall Tau):
 ```
 
 ```{r day_ts, fig.height=4}
-predictions_day %>%
-  complete(date = seq.Date(min(date), max(date), 1)) %>%
-  ggplot(aes(date)) +
-  geom_line(aes(y = rank_pred, linetype = "Predicted"), color = "black") +
-  geom_point(aes(y = rank_obs, color = split), size = 1) +
-  scale_color_brewer("Split", palette = "Set1", labels = split_labels) +
-  scale_x_date(date_labels = "%b %Y", date_breaks = "2 months", expand = expansion()) +
-  scale_y_continuous(breaks = scales::pretty_breaks(n = 8), labels = scales::percent_format(accuracy = 1), expand = expansion()) +
-  labs(
-    x = "Date",
-    y = "Percentile Rank",
-    linetype = NULL,
-    title = "Daily Timeseries of Observed and Predicted Ranks"
-  ) +
-  theme_bw() +
-  theme(
-    axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)
-  )
+if (any(!is.na(predictions_day$value))) {
+  predictions_day %>%
+    complete(date = seq.Date(min(date), max(date), 1)) %>%
+    ggplot(aes(date)) +
+    geom_line(aes(y = rank_pred, linetype = "Predicted"), color = "black") +
+    geom_point(aes(y = rank_obs, color = split), size = 1) +
+    scale_color_brewer("Split", palette = "Set1", labels = split_labels) +
+    scale_x_date(date_labels = "%b %Y", date_breaks = "2 months", expand = expansion()) +
+    scale_y_continuous(breaks = scales::pretty_breaks(n = 8), labels = scales::percent_format(accuracy = 1), expand = expansion()) +
+    labs(
+      x = "Date",
+      y = "Percentile Rank",
+      linetype = NULL,
+      title = "Daily Timeseries of Observed and Predicted Ranks"
+    ) +
+    theme_bw() +
+    theme(
+      axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)
+    ) 
+} else if (nrow(predictions_day) > 1) {
+  predictions_day %>%
+    complete(date = seq.Date(min(date), max(date), 1)) %>%
+    ggplot(aes(date)) +
+    geom_line(aes(y = rank_pred, linetype = "Predicted"), color = "black") +
+    scale_x_date(date_labels = "%b %Y", date_breaks = "2 months", expand = expansion()) +
+    scale_y_continuous(breaks = scales::pretty_breaks(n = 8), labels = scales::percent_format(accuracy = 1), expand = expansion()) +
+    labs(
+      x = "Date",
+      y = "Percentile Rank",
+      linetype = NULL,
+      title = "Daily Timeseries of Predicted Ranks"
+    ) +
+    theme_bw() +
+    theme(
+      axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)
+    ) 
+} else {
+  print("No observed data.")
+}
 ```
 
 
 ```{r day_splot, fig.height=4}
-predictions_day %>%
-  ggplot(aes(rank_obs, rank_pred)) +
-  geom_point(aes(color = split), size = 1, alpha = 0.5) +
-  geom_abline(color = "black") +
-  scale_color_brewer("Split", palette = "Set1", labels = split_labels) +
-  scale_x_continuous(breaks = scales::pretty_breaks(), expand = expansion(), limits = c(0, 1), labels = scales::percent) +
-  scale_y_continuous(breaks = scales::pretty_breaks(), expand = expansion(), limits = c(0, 1), labels = scales::percent) +
-  labs(
-    x = "Observed Rank",
-    y = "Predicted Rank",
-    title = "Observed vs. Predicted Daily Ranks"
-  ) +
-  facet_wrap(vars(split), nrow = 1, labeller = labeller(split = split_labels)) +
-  theme_bw() +
-  theme(
-    axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5),
-    aspect.ratio = 1
-  )
+if (any(!is.na(predictions_day$value))) {
+  predictions_day %>%
+    ggplot(aes(rank_obs, rank_pred)) +
+    geom_point(aes(color = split), size = 1, alpha = 0.5) +
+    geom_abline(color = "black") +
+    scale_color_brewer("Split", palette = "Set1", labels = split_labels) +
+    scale_x_continuous(breaks = scales::pretty_breaks(), expand = expansion(), limits = c(0, 1), labels = scales::percent) +
+    scale_y_continuous(breaks = scales::pretty_breaks(), expand = expansion(), limits = c(0, 1), labels = scales::percent) +
+    labs(
+      x = "Observed Rank",
+      y = "Predicted Rank",
+      title = "Observed vs. Predicted Daily Ranks"
+    ) +
+    facet_wrap(vars(split), nrow = 1, labeller = labeller(split = split_labels)) +
+    theme_bw() +
+    theme(
+      axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5),
+      aspect.ratio = 1
+    )
+}
 ```

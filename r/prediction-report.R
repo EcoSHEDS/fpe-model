@@ -21,8 +21,8 @@ generate_report <- function (station_id, model_code, directory = "/mnt/d/fpe/ran
 
 generate_report(9, "RANK-FLOW-20240410")
 
-station_ids <- read_csv("/mnt/d/fpe/rank/stations-wb.txt", col_names = "station_id")$station_id
-walk(station_ids, \(x) generate_report(x, "RANK-FLOW-20240410"))
+station_ids <- read_csv("/mnt/d/fpe/rank/stations-20240613-3.txt", col_names = "station_id")$station_id
+walk(station_ids, \(x) generate_report(x, "RANK-FLOW-20240613"))
 
 # all runs in csv file
 runs <- read_csv("/mnt/d/fpe/rank/model-runs.csv")

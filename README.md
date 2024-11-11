@@ -1,18 +1,18 @@
-# Flow Photo RankNet Model
-
-An [EcoSHEDS](https://www.usgs.gov/apps/ecosheds/) Project
-
-:bangbang: **WARNING**: this repo is under heavy development. Use at your own risk.
+# USGS Flow Photo Explorer Model
 
 ## Background
 
 This repo contains the source code for a deep learning model designed to estimate streamflow (or other hydrologic metrics) using timelapse imagery. This model is integrated into the [EcoSHEDS Flow Photo Explorer](https://www.usgs.gov/apps/ecosheds/fpe/).
 
-Original development of this model was completed by Amrita Gupta at [Microsoft AI For Good Lab](https://www.microsoft.com/en-us/research/group/ai-for-good-research-lab/) and Tony Chang at [Conservation Science Partners](https://www.csp-inc.org/) with funding from the U.S. Geological Survey and the National Geographic Society.
+Initial development of this model was completed by Amrita Gupta at [Microsoft AI For Good Lab](https://www.microsoft.com/en-us/research/group/ai-for-good-research-lab/) and Tony Chang at [Conservation Science Partners](https://www.csp-inc.org/) with funding from the U.S. Geological Survey and the National Geographic Society.
 
 Preliminary research and model development can be found in:
 
 > Gupta, A., Chang, T., Walker, J., and Letcher, B. (2022). *Towards Continuous Streamflow Monitoring with Time-Lapse Cameras and Deep Learning.* In ACM SIGCAS/SIGCHI Conference on Computing and Sustainable Societies (COMPASS) (COMPASS '22). Association for Computing Machinery, New York, NY, USA, 353–363. https://doi.org/10.1145/3530190.3534805
+
+The model was then operationalized for training and inference using AWS SageMaker by Jeff Walker at [Walker Environmental Research](https://walkerenvres.com).
+
+Ongoing model development is continuing with contributions from Amrita Gupta [Microsoft AI For Good Lab](https://www.microsoft.com/en-us/research/group/ai-for-good-research-lab/) and Jeff Walker at [Walker Environmental Research](https://walkerenvres.com) as part of the USGS EcoSHEDS project.
 
 ## Python Environment
 
@@ -190,6 +190,10 @@ Rscript rank-input.R </path/to/datasets> 29 FLOW_CFS 20240326 20240328
 
 ```sh
 python src/run-train.py --station-id 68 --directory=/mnt/d/fpe/rank --model-code RANK-FLOW-20240410
+python src/stop-train.py --job-name fpe-rank-20240423-165642
+
+# batch
+./batch-run.sh train /mnt/d/fpe/rank/stations.txt /mnt/d/fpe/rank RANK-FLOW-20240613
 ```
 
 ## Model Inference
@@ -201,14 +205,29 @@ python src/run-transform.py --station-id 68 --directory=/mnt/d/fpe/rank --model-
 python src/run-transform-merge.py --station-id 68 --directory=/mnt/d/fpe/rank --model-code RANK-FLOW-20240410
 # wait for merge to complete (fpe-prod-lambda-models)
 python src/run-transform-predictions.py --station-id 68 --directory=/mnt/d/fpe/rank --model-code RANK-FLOW-20240410
+
+# batch
+./batch-run.sh transform /mnt/d/fpe/rank/stations.txt /mnt/d/fpe/rank RANK-FLOW-20240613
+./batch-run.sh transform-merge /mnt/d/fpe/rank/stations.txt /mnt/d/fpe/rank RANK-FLOW-20240613
+./batch-run.sh transform-prediction /mnt/d/fpe/rank/stations.txt /mnt/d/fpe/rank RANK-FLOW-20240613
 ```
 
-## Deploy
+## Deploy to Database
+
+Create database rows using R:
+
+```sh
+# generates stations-models-db.csv and stations-models-uuid.txt
+cd r
+Rscript rank-model-db.R -t RANK -v FLOW_CFS -c RANK-FLOW-20240613 -s https://usgs-chs-conte-prod-fpe-storage.s3.us-west-2.amazonaws.com/models /mnt/d/fpe/rank/stations.txt
+```
+
+Manually import database rows from `stations-models-db.csv`.
 
 Copy diagnostics report and predictions CSV to S3.
 
 ```sh
-./batch-deploy.sh /mnt/d/fpe/rank/stations-wb-model-uuid.txt /mnt/d/fpe/rank RANK-FLOW-20240410
+./batch-deploy.sh /mnt/d/fpe/rank/stations-models-uuid.txt /mnt/d/fpe/rank RANK-FLOW-20240613
 ```
 
 ## License
