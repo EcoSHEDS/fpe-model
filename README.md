@@ -38,6 +38,10 @@ conda install boto3 sagemaker
 # see https://pytorch.org/get-started/previous-versions/
 pip install torch==1.13.1
 pip install torchvision==0.14.1
+# or
+conda install pytorch torchvision torchaudio -c pytorch -c nvidia
+# w/ cuda
+conda install pytorch= torchvision torchaudio pytorch-cuda=12.1 -c pytorch -c nvidia
 ```
 
 Activate conda environment and start Jupyter Lab
@@ -48,6 +52,65 @@ jupyter lab
 ```
 
 Then navigate to http://localhost:8888
+
+## Docker Container
+
+Alternatively, you can run this code using one of the [AWS deep learning containers](https://github.com/aws/deep-learning-containers/blob/master/available_images.md), which allows you to replicate the SageMaker environment. See [instructions](https://docs.aws.amazon.com/deep-learning-containers/latest/devguide/deep-learning-containers-ec2-setup.html).
+
+```sh
+# first login to docker with aws creds
+aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin 763104351884.dkr.ecr.us-east-1.amazonaws.com
+# pull image 
+docker pull 763104351884.dkr.ecr.us-east-1.amazonaws.com/pytorch-training:2.2.0-cpu-py310-ubuntu20.04-ec2
+# run image
+docker run -it 763104351884.dkr.ecr.us-east-1.amazonaws.com/pytorch-training:2.2.0-cpu-py310-ubuntu20.04-ec2
+```
+
+If a GPU is available, set up the [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html), then add `--runtime=nvidia --gpus all` options to the docker command.
+
+```sh
+# fetch GPU container
+docker pull 763104351884.dkr.ecr.us-east-1.amazonaws.com/pytorch-training:2.2.0-gpu-py310-cu121-ubuntu20.04-ec2
+docker run -it --runtime=nvidia --gpus all 763104351884.dkr.ecr.us-east-1.amazonaws.com/pytorch-training:2.2.0-gpu-py310-cu121-ubuntu20.04-ec2
+nvidia-smi # run within container, should output GPU info
+```
+
+Test pytorch
+
+```sh
+mkdir /app
+cd /app
+git clone https://github.com/pytorch/examples.git
+python examples/mnist/main.py
+```
+
+Run FPE training
+
+```sh
+docker run -it \
+    --runtime=nvidia \
+    --gpus all \
+    -v /home/jeff/data/fpe/WESTB0/models/RANK-FLOW-20240424/input:/opt/ml/input/data/values \
+    -v /home/jeff/data/fpe/WESTB0/images:/opt/ml/input/data/images \
+    -v /opt/ml:/opt/ml \
+    -v $(pwd):/app \
+    -w /app \
+    --env-file .env.docker \
+    --network host \
+    --shm-size=4g \
+    763104351884.dkr.ecr.us-east-1.amazonaws.com/pytorch-training:2.2.0-gpu-py310-cu121-ubuntu20.04-ec2
+
+# interactively
+python src/train.py
+
+# check stats in separate terminal
+docker ps # get container id
+docker stats <container-id>
+docker exec -it <container-id> /bin/bash
+top
+nvidia-smi
+nvidia-smi dmon
+```
 
 ## Datasets
 

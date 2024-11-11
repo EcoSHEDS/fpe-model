@@ -5,20 +5,19 @@
 import numpy as np
 import torch
 import torch.nn as nn
-from torchvision.models import resnet18, resnet50
+from torchvision.models import resnet18, ResNet18_Weights, resnet50, ResNet50_Weights
 from utils import get_output_shape
 
 
 class ResNet18(nn.Module):
     """PyTorch ResNet-18 architecture.
     Attributes:
-        pretrained (bool): whether to use weights from network trained on ImageNet
         truncate (int): how many layers to remove from the end of the network
     """
 
-    def __init__(self, pretrained=True, truncate=0):
+    def __init__(self, truncate=0):
         super(ResNet18, self).__init__()
-        self.model = resnet18(pretrained=pretrained)
+        self.model = resnet18(weights=ResNet18_Weights.DEFAULT)
         if truncate > 0:
             self.model = nn.Sequential(*list(self.model.children())[:-truncate])
 
@@ -32,13 +31,12 @@ class ResNet18(nn.Module):
 class ResNet50(nn.Module):
     """PyTorch ResNet-50 architecture.
     Attributes:
-        pretrained (bool): whether to use weights from network trained on ImageNet
         truncate (int): how many layers to remove from the end of the network
     """
 
-    def __init__(self, pretrained=True, truncate=0):
+    def __init__(self, truncate=0):
         super(ResNet50, self).__init__()
-        self.model = resnet50(pretrained=pretrained)
+        self.model = resnet50(weights=ResNet50_Weights.DEFAULT)
         if truncate > 0:
             self.model = nn.Sequential(*list(self.model.children())[:-truncate])
 
@@ -60,7 +58,6 @@ class ResNetRegressionNet(nn.Module):
         transforms=[],
         resnet_size=50,
         truncate=2,
-        pretrained=True,
         num_hlayers=[256, 64],
     ):
         super(ResNetRegressionNet, self).__init__()
@@ -71,9 +68,9 @@ class ResNetRegressionNet(nn.Module):
         self.transforms = transforms
 
         if resnet_size == 50:
-            self.resnetbody = ResNet50(pretrained=pretrained, truncate=truncate)
+            self.resnetbody = ResNet50(truncate=truncate)
         elif resnet_size == 18:
-            self.resnetbody = ResNet18(pretrained=pretrained, truncate=truncate)
+            self.resnetbody = ResNet18(truncate=truncate)
         else:
             raise ValueError("Only resnet_size 50 or 18 are supported.")
         num_filters = get_output_shape(self.resnetbody, input_shape=(1, *input_shape))[
@@ -109,7 +106,6 @@ class ResNetRankNet(ResNetRegressionNet):
         transforms=[],
         resnet_size=50,
         truncate=2,
-        pretrained=True,
         num_hlayers=[256, 64],
     ):
         super().__init__(
@@ -117,7 +113,6 @@ class ResNetRankNet(ResNetRegressionNet):
             transforms=transforms,
             resnet_size=resnet_size,
             truncate=truncate,
-            pretrained=pretrained,
             num_hlayers=num_hlayers,
         )
 

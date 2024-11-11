@@ -29,6 +29,7 @@ from utils import (
 from datasets import FlowPhotoRankingPairsDataset
 from modules import ResNetRankNet
 from losses import RankNetLoss
+import mlflow
 
 def list_all_files(directory):
     for root, dirs, files in os.walk(directory):
@@ -81,10 +82,16 @@ def create_image_transforms(
     image_transforms["eval"] = Compose(image_transforms["eval"])
     return image_transforms
 
-def train(args):
+def train(args):    
     print("train()")
     print("args:")
     print(args.__dict__)
+
+    mlflow.log_param("site", "WESTB0")
+
+    args_dict = vars(args)
+    for key, value in args_dict.items():
+        mlflow.log_param(key, value)
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print("device: {}".format(device))
@@ -225,6 +232,7 @@ def train(args):
         metriclogs["train_loss"].append(train_loss)
         print("train step took %0.1f s" % (stop_time - start_time))
         print("train loss = %0.2f" % (train_loss))
+        mlflow.log_metric("train_loss", train_loss, step=epoch)
 
         # validate on val set
         start_time = time.time()
@@ -236,6 +244,7 @@ def train(args):
         print(
             f"[Epoch {epoch}|val]\t{(stop_time - start_time):.2f} s\t{(val_loss[0]):.4f}"
         )
+        mlflow.log_metric("val_loss", val_loss[0], step=epoch)
 
         # update lr scheduler
         scheduler.step(val_loss[0])
@@ -301,8 +310,8 @@ if __name__ == "__main__":
 
     # SageMaker parameters
     # https://github.com/aws/sagemaker-containers#how-a-script-is-executed-inside-the-container
-    parser.add_argument("--hosts", type=str, default=ast.literal_eval(os.environ["SM_HOSTS"]))
-    parser.add_argument("--current-host", type=str, default=os.environ["SM_CURRENT_HOST"])
+    # parser.add_argument("--hosts", type=str, default=ast.literal_eval(os.environ["SM_HOSTS"]))
+    # parser.add_argument("--current-host", type=str, default=os.environ["SM_CURRENT_HOST"])
     parser.add_argument("--model-dir", type=str, default=os.environ["SM_MODEL_DIR"])
     parser.add_argument("--checkpoint-dir", type=str, default="/opt/ml/checkpoints")
     parser.add_argument("--output-dir", type=str, default=os.environ["SM_OUTPUT_DIR"])
@@ -344,11 +353,11 @@ if __name__ == "__main__":
         help="remove image color channels",
     )
     parser.add_argument(
-        "--normalize", type=bool, default=True,
+        "--normalize", type=bool, default=False,
         help="whether to normalize image inputs to model",
     )
     parser.add_argument(
-        "--augment", type=bool, default=True,
+        "--augment", type=bool, default=False,
         help="whether to use image augmentation during training",
     )
 
@@ -358,4 +367,7 @@ if __name__ == "__main__":
         help="filename of CSV file with annotated image pairs",
     )
 
-    train(parser.parse_args())
+    mlflow.set_tracking_uri("http://localhost:5000")
+    mlflow.set_experiment("fpe-rank")
+    with mlflow.start_run(log_system_metrics=True):
+        train(parser.parse_args())

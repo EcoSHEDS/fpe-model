@@ -31,7 +31,6 @@ def model_fn(model_dir):
             transforms=checkpoint["transforms"],
             resnet_size=18,
             truncate=2,
-            pretrained=True,
         )
         model = torch.nn.DataParallel(
             model,
@@ -81,7 +80,6 @@ def transform(args):
 
     model = model_fn(args.model_dir)
     model.eval()
-    transform_image = model.module.transforms['eval']
 
     print(f"computing predictions (n={len(ds)})")
     with torch.no_grad():
