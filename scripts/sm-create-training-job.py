@@ -12,9 +12,9 @@ from io import StringIO
 from utils import get_batch_creds, timestamp
 
 # aws parameters
-AWS_PROFILE="conte-prod"
-AWS_REGION="us-west-2"
-JOB_ROLE_ARN="arn:aws:iam::694155575325:role/fpe-prod-sagemaker-execution-role"
+# AWS_PROFILE="conte-prod"
+# AWS_REGION="us-west-2"
+# JOB_ROLE_ARN="arn:aws:iam::694155575325:role/fpe-prod-sagemaker-execution-role"
 
 # # job parameters
 # root_dir = f"/mnt/d/fpe/rank"
@@ -23,19 +23,19 @@ JOB_ROLE_ARN="arn:aws:iam::694155575325:role/fpe-prod-sagemaker-execution-role"
 # model = "RANK-FLOW-20240402"
 
 
-def run_train (station_id, model_code, directory):
+def run_train(station_id, model_code, directory, aws_profile, aws_region, job_role_arn):
     print(f"run_train: {station_id} {model_code} {directory}")
-    session = boto3.Session(profile_name=AWS_PROFILE, region_name=AWS_REGION)
+    session = boto3.Session(profile_name=aws_profile, region_name=aws_region)
     s3 = session.client("s3")
 
-    creds = get_batch_creds(session, JOB_ROLE_ARN)
+    creds = get_batch_creds(session, job_role_arn)
     sm_boto_session = boto3.Session(
         aws_access_key_id=creds['AccessKeyId'],
         aws_secret_access_key=creds['SecretAccessKey'],
         aws_session_token=creds['SessionToken'],
-        region_name=AWS_REGION
+        region_name=aws_region
     )
-    sm_session = sagemaker.Session(boto_session = sm_boto_session)
+    sm_session = sagemaker.Session(boto_session=sm_boto_session)
 
     job_name = f"fpe-rank-{timestamp()}"
 
@@ -98,12 +98,22 @@ def run_train (station_id, model_code, directory):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
 
-    parser.add_argument("--station-id", type=str)
-    parser.add_argument("--model-code", type=str)
-    parser.add_argument("--directory", type=str)
+    parser.add_argument("--station-id", type=str, required=True)
+    parser.add_argument("--model-code", type=str, required=True)
+    parser.add_argument("--directory", type=str, required=True)
+    parser.add_argument("--aws-profile", type=str, required=True, help="AWS profile name")
+    parser.add_argument("--aws-region", type=str, required=True, help="AWS region")
+    parser.add_argument("--job-role-arn", type=str, required=True, help="AWS IAM role ARN")
 
     args = parser.parse_args()
     print(args)
 
-    run_train(args.station_id, args.model_code, args.directory)
+    run_train(
+        args.station_id,
+        args.model_code,
+        args.directory,
+        args.aws_profile,
+        args.aws_region,
+        args.job_role_arn
+    )
 

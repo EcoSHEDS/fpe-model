@@ -16,3 +16,5 @@ r/qmd/*.md
 r/qmd/*.rmarkdown
 r/qmd/*_files/
 r/notes/*/*
+
+mlruns/

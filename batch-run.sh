@@ -15,7 +15,7 @@ while IFS= read -r LINE
 do
     STATION_ID=$(echo "${LINE}" | awk '{print $1}')
     ARGS="--station-id ${STATION_ID} --directory=${DIRECTORY} --model-code ${MODEL_CODE}"
-    SCRIPT="src/run-${METHOD}.py"
+    SCRIPT="scripts/run-${METHOD}.py"
     echo "running: python ${SCRIPT} ${ARGS}"
     python ${SCRIPT} ${ARGS}
 done < ${STATIONS_FILE}

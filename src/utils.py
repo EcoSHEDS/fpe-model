@@ -6,46 +6,9 @@ from urllib.parse import urlparse
 from tqdm import tqdm
 from losses import RankNetLoss
 import torch
-
-def get_url_path(url):
-    return urlparse(url).path[1:]
-
-def set_seeds(seed, multigpu=False):
-    random.seed(seed)
-    np.random.seed(seed)
-
-    # In general seed PyTorch operations
-    torch.manual_seed(seed)
-    if not multigpu:
-        # If you are using CUDA on 1 GPU, seed it
-        torch.cuda.manual_seed(seed)
-    else:
-        # If you are using CUDA on more than 1 GPU, seed them all
-        torch.cuda.manual_seed_all(seed)
-    # Disable the inbuilt cudnn auto-tuner that finds the best algorithm to use for your hardware.
-    # torch.backends.cudnn.benchmark = False # this might be slowing down training
-    # Certain operations in Cudnn are not deterministic, and this line will force them to behave!
-    # torch.backends.cudnn.deterministic = True # this might be slowing down training
-
-
-def load_data(data_file, col_timestamp="timestamp", col_filename="filename", col_url="url"):
-    df = pd.read_csv(data_file)
-    df[col_timestamp] = pd.to_datetime(df[col_timestamp])
-    df[col_filename] = df[col_url].apply(get_url_path)
-    df.sort_values(by=col_timestamp, inplace=True, ignore_index=True)
-    return df
-
-def load_pairs(data_file):
-    df = pd.read_csv(data_file)
-    df['timestamp_1'] = pd.to_datetime(df['timestamp_1'])
-    df['timestamp_2'] = pd.to_datetime(df['timestamp_2'])
-    return df
-
-def get_output_shape(model, input_shape=(1, 3, 224, 224)):
-    x = torch.randn(*input_shape)
-    out = model(x)
-    return out.shape
-
+import numpy as np
+from scipy import stats
+from sklearn.metrics import ndcg_score, average_precision_score
 
 class MetricLogger(object):
     """Computes and tracks the average and current value of a metric.
@@ -72,7 +35,6 @@ class MetricLogger(object):
         self.sum += val * n
         self.avg = self.sum / self.count
 
-
 class Accuracy(torch.nn.Module):
     def __init__(self):
         super(Accuracy, self).__init__()
@@ -82,7 +44,6 @@ class Accuracy(torch.nn.Module):
         total = targets.size(0)
         correct = (predicted == targets).sum()
         return 100 * correct / float(total)
-
 
 class PairwiseRankAccuracy(torch.nn.Module):
     def __init__(self):
@@ -94,15 +55,47 @@ class PairwiseRankAccuracy(torch.nn.Module):
         preds = torch.zeros_like(targets)
         preds = torch.where(Pij < boundaries[0], -1, preds)
         preds = torch.where(Pij > boundaries[1], 1, preds)
-        # preds[(Pij>boundaries[1])] = 1
-        # preds[(Pij<boundaries[0])] = -1
         total = targets.size(0)
-        # correct = (preds == targets).sum()
         correct = torch.eq(preds, targets).sum()
         return 100 * correct / float(total)
-        # zeros = (Pij>=0.33).float()*(Pij<=0.66).float()
-        # target_probs = 0.5*(targets + 1)
 
+def get_url_path(url):
+    return urlparse(url).path[1:]
+
+def set_seeds(seed, multigpu=False):
+    random.seed(seed)
+    np.random.seed(seed)
+
+    # In general seed PyTorch operations
+    torch.manual_seed(seed)
+    if not multigpu:
+        # If you are using CUDA on 1 GPU, seed it
+        torch.cuda.manual_seed(seed)
+    else:
+        # If you are using CUDA on more than 1 GPU, seed them all
+        torch.cuda.manual_seed_all(seed)
+    # Disable the inbuilt cudnn auto-tuner that finds the best algorithm to use for your hardware.
+    # torch.backends.cudnn.benchmark = False # this might be slowing down training
+    # Certain operations in Cudnn are not deterministic, and this line will force them to behave!
+    # torch.backends.cudnn.deterministic = True # this might be slowing down training
+
+def load_images_from_csv(data_file, col_timestamp="timestamp", col_filename="filename", col_url="url"):
+    df = pd.read_csv(data_file)
+    df[col_timestamp] = pd.to_datetime(df[col_timestamp])
+    df[col_filename] = df[col_url].apply(get_url_path)
+    df.sort_values(by=col_timestamp, inplace=True, ignore_index=True)
+    return df
+
+def load_pairs_from_csv(data_file):
+    df = pd.read_csv(data_file)
+    df['timestamp_1'] = pd.to_datetime(df['timestamp_1'])
+    df['timestamp_2'] = pd.to_datetime(df['timestamp_2'])
+    return df
+
+def get_output_shape(model, input_shape=(1, 3, 224, 224)):
+    x = torch.randn(*input_shape)
+    out = model(x)
+    return out.shape
 
 def fit(model, criterion, optimizer, train_dl, device, epoch_num=None, verbose=False):
     """Train model for one epoch.
@@ -163,10 +156,9 @@ def fit(model, criterion, optimizer, train_dl, device, epoch_num=None, verbose=F
 
     return batch_loss_logger.avg
 
-
 def validate(model, criterions, dl, device):
     """Calculate multiple criterion for a model on a dataset."""
-    print("Validating")
+    
     model.eval()
     # dl.dataset.evaluate()
     criterion_loggers = [MetricLogger() for i in range(len(criterions))]
@@ -214,7 +206,6 @@ def validate(model, criterions, dl, device):
                 criterion_loggers[i].update(cval.item())
     return [cl.avg for cl in criterion_loggers]
 
-
 def evaluate_criterion(model, criterion, dl, device):
     """Calculate criterion for a model on a dataset.
 
@@ -244,7 +235,6 @@ def evaluate_criterion(model, criterion, dl, device):
             batch_loss_logger.update(loss.item())
     return batch_loss_logger.avg
 
-
 def evaluate_accuracy(model, dl, device):
     model.eval()  # ensure model is in eval mode
     # dl.dataset.evaluate()  # ensure eval transforms are applied
@@ -259,7 +249,6 @@ def evaluate_accuracy(model, dl, device):
             total += labels.size(0)
             correct += (predicted == labels).sum().item()
     return 100 * correct / float(total)
-
 
 def parse_configargparse_args(params_file):
     """Parse parameters and their values from a configargparse output file.
@@ -357,7 +346,6 @@ def parse_configargparse_args(params_file):
         parsed_values[key] = types[key](val)
     return parsed_values
 
-
 def timestamp():
     return time.strftime("%Y%m%d-%H%M%S")
 
@@ -368,3 +356,56 @@ def get_batch_creds(session, role_arn):
         RoleSessionName=f"fpe-sagemaker-session--{timestamp()}"
     )
     return response['Credentials']
+
+def evaluate_rank_predictions(scores, values, n_buckets=10):
+    """Evaluate ranking model predictions using multiple metrics"""
+    results = {}
+    
+    # Rank correlations
+    results['kendall_tau'] = stats.kendalltau(scores, values)[0]
+    results['spearman_rho'] = stats.spearmanr(scores, values)[0]
+    
+    # Percentile-based metrics
+    value_ranks = stats.rankdata(values) / len(values)
+    score_ranks = stats.rankdata(scores) / len(scores)
+    results['rank_mae'] = np.mean(np.abs(value_ranks - score_ranks))
+    
+    # NDCG
+    # Discretize values into buckets for relevance scores
+    value_buckets = pd.qcut(values, n_buckets, labels=False)
+    y_true = np.zeros((1, len(values)))
+    y_true[0] = value_buckets
+    y_score = np.zeros((1, len(scores)))
+    y_score[0] = scores
+    results['ndcg'] = ndcg_score(y_true, y_score)
+    
+    # High flow MAP (existing)
+    high_maps = []
+    for percentile in [50, 75, 90, 95]:
+        threshold = np.percentile(values, percentile)
+        relevant = values >= threshold
+        precision = average_precision_score(relevant, scores)
+        high_maps.append({
+            'percentile': percentile,
+            'threshold': threshold,
+            'precision': precision
+        })
+    results['map_high'] = np.mean([m['precision'] for m in high_maps])
+    results['map_high_precisions'] = high_maps
+    
+    # Low flow MAP (new)
+    low_maps = []
+    for percentile in [5, 10, 25, 50]:  # Lower percentiles
+        threshold = np.percentile(values, percentile)
+        relevant = values <= threshold    # Changed to <= for low flows
+        # Invert scores since we want low predictions to indicate low flows
+        precision = average_precision_score(relevant, -scores)  
+        low_maps.append({
+            'percentile': percentile,
+            'threshold': threshold,
+            'precision': precision
+        })
+    results['map_low'] = np.mean([m['precision'] for m in low_maps])
+    results['map_low_precisions'] = low_maps
+
+    return results

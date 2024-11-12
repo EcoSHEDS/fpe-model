@@ -24,8 +24,8 @@ JOB_ROLE_ARN="arn:aws:iam::694155575325:role/fpe-prod-sagemaker-execution-role"
 # model = "RANK-FLOW-20240402"
 
 
-def run_transform (station_id, model_code, directory):
-    print(f"run_transform: {station_id} {model_code} {directory}")
+def create_transform_job (station_id, model_code, directory):
+    print(f"create_transform_job: {station_id} {model_code} {directory}")
 
     session = boto3.Session(profile_name=AWS_PROFILE, region_name=AWS_REGION)
     s3 = session.client("s3")
@@ -119,5 +119,5 @@ if __name__ == "__main__":
     args = parser.parse_args()
     print(args)
 
-    run_transform(args.station_id, args.model_code, args.directory)
+    create_transform_job(args.station_id, args.model_code, args.directory)
 

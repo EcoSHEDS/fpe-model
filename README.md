@@ -112,6 +112,58 @@ nvidia-smi
 nvidia-smi dmon
 ```
 
+
+Create new docker image with mlflow
+
+```sh
+docker build -t fpe-rank .
+docker run -it --runtime=nvidia --gpus all fpe-rank
+
+docker run -it \
+    --runtime=nvidia \
+    --gpus all \
+    -v /home/jeff/data/fpe/WESTB0/models/RANK-FLOW-20240424/input:/opt/ml/input/data/values \
+    -v /home/jeff/data/fpe/WESTB0/images:/opt/ml/input/data/images \
+    -v /opt/ml:/opt/ml \
+    -v $(pwd):/app \
+    -w /app \
+    --env-file .env.docker \
+    --network host \
+    --shm-size=4g \
+    fpe-rank \
+    python src/train.py --mlflow-experiment-name fpe-rank
+```
+
+## Experiments
+
+Experiments are stored in the `experiments` directory.
+
+```txt
+experiments/
+└── <experiment-name>/
+    ├── data/                            # Input data
+    ├── r/                               # R scripts for generating run data
+    └── runs/
+        └── <run_name>/   
+            ├── input/
+            │   ├── config.yaml          # Training parameters
+            │   ├── pairs.csv            # Annotation dataset
+            │   └── test.csv             # Test dataset
+            ├── output/
+            │   ├── train/
+            │   │   ├── metrics.csv      # Per-epoch metrics (train_loss, val_loss, etc.)
+            │   │   └── args.json        # Training arguments used
+            │   └── test/
+            │       ├── predictions.csv  # Test predictions
+            │       └── metrics.json     # Test metrics
+            ├── model/
+            │   └── model.pth            # Best model weights
+            └── checkpoints/             # Periodic model checkpoints
+                ├── epoch_00.pth
+                ├── epoch_01.pth
+                └── epoch_02.pth
+```
+
 ## Datasets
 
 Quick start:
@@ -200,11 +252,11 @@ python src/stop-train.py --job-name fpe-rank-20240423-165642
 
 ```sh
 # run training job
-python src/run-transform.py --station-id 68 --directory=/mnt/d/fpe/rank --model-code RANK-FLOW-20240410
+python scripts/run-transform.py --station-id 68 --directory=/mnt/d/fpe/rank --model-code RANK-FLOW-20240410
 # wait for transform job to complete
-python src/run-transform-merge.py --station-id 68 --directory=/mnt/d/fpe/rank --model-code RANK-FLOW-20240410
+python scripts/run-transform-merge.py --station-id 68 --directory=/mnt/d/fpe/rank --model-code RANK-FLOW-20240410
 # wait for merge to complete (fpe-prod-lambda-models)
-python src/run-transform-predictions.py --station-id 68 --directory=/mnt/d/fpe/rank --model-code RANK-FLOW-20240410
+python scripts/run-transform-predictions.py --station-id 68 --directory=/mnt/d/fpe/rank --model-code RANK-FLOW-20240410
 
 # batch
 ./batch-run.sh transform /mnt/d/fpe/rank/stations.txt /mnt/d/fpe/rank RANK-FLOW-20240613
