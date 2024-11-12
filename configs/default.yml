@@ -1,0 +1,45 @@
+# Training parameters
+epochs: 30
+lr: 0.001
+unfreeze_after: 2
+batch_size: 64
+random_seed: 1691
+
+# Optimizer parameters
+momentum: 0.9
+scheduler_patience: 1
+scheduler_factor: 0.5
+
+# Transform parameters
+num_image_stats: 1000
+input_size: 480
+decolorize: false
+normalize: true
+augment: true
+
+# Data parameters
+num_workers: 4
+data_file: "train-pairs.csv"
+
+# Model parameters
+resnet_size: 18
+truncate: 2
+
+# Transform parameters
+crop_ratio: 0.8
+rotation_degrees: 10
+
+# Validation parameters
+eval_batch_size: null  # uses training batch size if null
+
+# Checkpoint parameters
+save_frequency: 1
+keep_n_checkpoints: -1
+
+# MLflow parameters
+# mlflow_tracking_uri: "http://localhost:5000"
+# mlflow_experiment_name: "default_experiment"
+
+# Early stopping parameters
+early_stopping_patience: 5
+early_stopping_min_delta: 0.0001
