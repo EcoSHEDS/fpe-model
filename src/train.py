@@ -243,11 +243,15 @@ def train(args: argparse.Namespace) -> None:
     if use_mlflow:
         # Log parameters
         mlflow.log_params(args.__dict__)
-        
-        # Log config file if used
-        if args.config:
-            mlflow.log_param("config_file", args.config)
-            # mlflow.log_artifact(args.config)
+        mlflow_params_path = Path(args.data_dir) / "mlflow-params.yaml"
+        logger.info("MLflow params path: %s", mlflow_params_path)
+        if mlflow_params_path.exists():
+            logger.info("Loading additional MLflow params from %s", mlflow_params_path)
+            with open(mlflow_params_path) as f:
+                mlflow_params = yaml.safe_load(f)
+                mlflow.log_params(mlflow_params)
+        else:
+            logger.info("No MLflow params file found at %s", mlflow_params_path)
     
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     logger.info("Using device: %s", device)

@@ -163,6 +163,10 @@ def test(args: argparse.Namespace) -> Dict[str, Any]:
         scores = predict_batch(model, dataset, device)
         df['score'] = scores
 
+        # Calculate timing metrics
+        total_test_time = time.time() - test_start_time
+        images_per_second = len(df) / total_test_time
+
         # Compute evaluation metrics
         metrics = evaluate_rank_predictions(
             scores=scores,
@@ -182,17 +186,15 @@ def test(args: argparse.Namespace) -> Dict[str, Any]:
             })
 
             mlflow.log_metrics({
-                "test_n_samples": len(df)
+                "test_n_samples": len(df),
+                "test_total_time": total_test_time,
+                "test_images_per_second": images_per_second
             })
             
             # Save predictions file as artifact
             predictions_path = Path(args.output_dir) / "predictions.csv"
             df.to_csv(predictions_path, index=False)
             mlflow.log_artifact(str(predictions_path))
-
-        # Calculate timing metrics
-        total_test_time = time.time() - test_start_time
-        images_per_second = len(df) / total_test_time
 
         # After computing predictions and metrics
         output_dict = {
