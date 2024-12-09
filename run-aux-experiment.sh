@@ -38,7 +38,6 @@ done
 
 
 # Default values
-CONTAINER="fpe-rank"
 EXPERIMENTS_DIR="/home/jeff/data/fpe/experiments"
 EXPERIMENT_NAME="test-experiment"
 RUN_NAME="test-run"
@@ -111,8 +110,8 @@ docker run -it \
     --env-file .env.docker \
     --network host \
     --shm-size=4g \
-    ${CONTAINER} \
-    python src/train.py \
+    fpe-rank \
+    python src/train_aux.py \
         --mlflow-experiment-name "${EXPERIMENT_NAME}" \
         --mlflow-run-name "${RUN_NAME}" \
         --config /opt/ml/input/data/data/config.yaml
@@ -142,8 +141,8 @@ docker run -it \
     --env-file .env.docker \
     --network host \
     --shm-size=4g \
-    ${CONTAINER} \
-    python src/test.py \
+    fpe-rank \
+    python src/test_aux.py \
         --mlflow-experiment-name "${EXPERIMENT_NAME}" \
         --run-name "${RUN_NAME}"
 

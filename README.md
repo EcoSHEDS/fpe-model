@@ -18,8 +18,6 @@ Ongoing model development is continuing with contributions from Amrita Gupta [Mi
 
 Environment should match the python and torch versions of an [available SageMaker container](https://github.com/aws/deep-learning-containers/blob/master/available_images.md).
 
-The FPE RankNet model currently uses python=3.9, torch=1.13.1, and torchvision=0.14.1.
-
 If using Ubuntu, create conda environment:
 
 ```sh
@@ -29,19 +27,12 @@ conda env create -f environment.yml
 Otherwise, create the environment manually:
 
 ```sh
-conda create -n fpe-rank python=3.9
+conda create -n fpe-rank python=3.11
 conda activate fpe-rank
 conda config --env --add channels conda-forge
-conda install jupyterlab numpy pandas scikit-learn tqdm
+conda install jupyterlab numpy pandas scikit-learn tqdm matplotlib
 conda install boto3 sagemaker
-
-# see https://pytorch.org/get-started/previous-versions/
-pip install torch==1.13.1
-pip install torchvision==0.14.1
-# or
-conda install pytorch torchvision torchaudio -c pytorch -c nvidia
-# w/ cuda
-conda install pytorch= torchvision torchaudio pytorch-cuda=12.1 -c pytorch -c nvidia
+conda install pytorch=2.4.0 torchvision=0.19.0 pytorch-cuda=12.4 -c pytorch -c nvidia
 ```
 
 Activate conda environment and start Jupyter Lab

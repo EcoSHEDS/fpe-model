@@ -15,11 +15,27 @@ class MSELoss(nn.Module):
 class RankNetLoss(nn.Module):
     def __init__(self):
         super(RankNetLoss, self).__init__()
+        self.bceloss = nn.BCELoss()
 
-    def forward(self, inputs_i, inputs_j, targets):
-        oij = inputs_i - inputs_j
-        Pij = torch.sigmoid(oij)
-        target_probs = 0.5 * (targets + 1)
-        bceloss = nn.BCELoss()
-        loss = bceloss(Pij, target_probs)
-        return loss
+    def forward(self, outputs1, outputs2, targets):
+        """Calculate RankNet loss.
+        
+        Args:
+            outputs1: Scores for first items in pairs (batch_size,)
+            outputs2: Scores for second items in pairs (batch_size,)
+            targets: Target labels as -1, 0, or 1 (batch_size,)
+            
+        Returns:
+            Loss value
+        """
+        # calculate difference between scores of each image pair
+        diff = outputs1 - outputs2  # Shape: (batch_size,)
+        
+        # calculate probability that sample i should rank higher than sample j
+        Pij = torch.sigmoid(diff) 
+
+        # map target labels to probabilities
+        target_probs = (targets + 1) / 2  # Map {-1, 0, 1} to {0, 0.5, 1}
+        
+        # Binary cross entropy between predicted and target probabilities
+        return self.bceloss(Pij, target_probs)

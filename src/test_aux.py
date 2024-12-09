@@ -1,145 +1,127 @@
+"""Testing script for ResNetRankNetWithAuxiliary models.
+
+This script extends test.py to handle additional numerical features alongside images.
+"""
+
 import argparse
 import json
 import logging
 import os
 from pathlib import Path
-from typing import Dict, Any, Optional, Tuple
 import time
+from typing import Dict
 
+import mlflow
 import numpy as np
 import pandas as pd
 import torch
 import torch.nn as nn
+
 from tqdm import tqdm
 
-from datasets import FlowPhotoDataset
-from modules import ResNetRankNet
-from utils import load_images_from_csv, evaluate_rank_predictions
-
-import mlflow
+from modules import ResNetRankNetWithAuxiliary
+from datasets import FlowPhotoDatasetWithAuxiliary
+from test import setup_mlflow, format_time
+from utils import evaluate_rank_predictions, load_images_from_csv
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-def load_model(model_path: Path, device: torch.device) -> nn.Module:
-    """Load model from checkpoint.
-    
-    Args:
-        model_path: Path to model checkpoint
-        device: Target device
-        
-    Returns:
-        Loaded model
-    """
+def load_model(model_path: str, device: torch.device) -> nn.Module:
+    """Load model from checkpoint."""
     logger.info(f"Loading model from: {model_path}")
-    
-    checkpoint = torch.load(model_path, map_location=device)
-    params = checkpoint["params"]
-    
-    model = ResNetRankNet(
-        input_shape=(3, params["input_shape"][0], params["input_shape"][1]),
-        transforms=checkpoint["transforms"],
-        resnet_size=params["args"]["resnet_size"],
-        truncate=params["args"]["truncate"],
-    )
-    model = nn.DataParallel(model, device_ids=None)
-    model.load_state_dict(checkpoint["model_state_dict"])
-    logger.info("Model loaded successfully")
 
+    checkpoint = torch.load(model_path, map_location=device)
+    params = checkpoint['params']
+    auxiliary_features = params.get('auxiliary_features', [])
+    
+    # Create model with same configuration as training
+    if not auxiliary_features:  # No auxiliary features
+        from modules import ResNetRankNet
+        model = ResNetRankNet(
+            input_shape=(3, params['input_shape'][0], params['input_shape'][1]),
+            transforms=checkpoint['transforms'],
+            resnet_size=18,
+            truncate=2
+        )
+    else:  # With auxiliary features
+        model = ResNetRankNetWithAuxiliary(
+            input_shape=(3, params['input_shape'][0], params['input_shape'][1]),
+            transforms=checkpoint['transforms'],
+            resnet_size=18,
+            truncate=2,
+            auxiliary_size=len(auxiliary_features),
+            auxiliary_encoding_size=params.get('auxiliary_encoding_size', 32)
+        )
+    
+    # Wrap model in DataParallel since that's how it was saved
+    model = nn.DataParallel(model)
+
+    # Load trained weights
+    model.load_state_dict(checkpoint["model_state_dict"])
+    
+    # Store auxiliary features for dataset creation
+    model.module.auxiliary_features = auxiliary_features
+
+    logger.info("Model loaded successfully")
+    
     return model.to(device).eval()
 
 def predict_batch(
     model: nn.Module,
-    dataset: FlowPhotoDataset,
+    dataset: FlowPhotoDatasetWithAuxiliary,
     device: torch.device
-) -> np.ndarray:
-    """Generate predictions for a dataset.
-    
-    Args:
-        model: Loaded model
-        dataset: Dataset to predict
-        device: Target device
-        
-    Returns:
-        Array of predictions
-    """
+) -> Dict[str, float]:
+    """Generate predictions for a batch of images."""
     predictions = []
     
     with torch.no_grad():
-        for image, _ in tqdm(dataset, desc="Generating predictions"):
-            # Move image to device and get prediction
-            image = image.to(device)
-            transformed = model.module.transforms['eval'](image)
-            output = model.module.forward_single(transformed.unsqueeze(0))
-            score = output.detach().cpu().numpy().item()
-            predictions.append(score)
+        for batch in tqdm(dataset, desc="Generating predictions"):
+            if len(batch) == 3:  # image, auxiliary, filename
+                image, auxiliary, filename = batch
+                image = image.to(device)
+                transformed = model.module.transforms['eval'](image)
+                
+                if isinstance(model.module, ResNetRankNetWithAuxiliary):
+                    auxiliary = auxiliary.to(device)
+                    output = model.module.forward_single(transformed.unsqueeze(0), auxiliary.unsqueeze(0))
+                else:
+                    output = model.module.forward_single(transformed.unsqueeze(0))
+                    
+                score = output.detach().cpu().numpy().item()
+                predictions.append(score)
             
     return np.array(predictions)
 
-def setup_mlflow(
-    experiment_name: Optional[str] = None,
-    tracking_uri: Optional[str] = None,
-    run_name: Optional[str] = None
-) -> Tuple[bool, Optional[str]]:
-    """Setup MLflow tracking if available.
+def test(args: argparse.Namespace) -> Dict[str, float]:
+    """Run testing pipeline.
     
     Args:
-        experiment_name: Name of the MLflow experiment
-        tracking_uri: URI of the MLflow tracking server
-        run_name: Name of the run to associate metrics with
+        args: Command line arguments
         
     Returns:
-        Tuple of (whether MLflow is enabled, run ID if found)
+        Dictionary of test results
     """
-    try:
-        if tracking_uri:
-            mlflow.set_tracking_uri(tracking_uri)
-            logger.info("MLflow tracking URI set to: %s", tracking_uri)
-        
-        if experiment_name:
-            mlflow.set_experiment(experiment_name)
-            logger.info("MLflow experiment set to: %s", experiment_name)
-            
-            if run_name:
-                # Try to find existing run
-                client = mlflow.tracking.MlflowClient()
-                runs = client.search_runs(
-                    experiment_ids=[client.get_experiment_by_name(experiment_name).experiment_id],
-                    filter_string=f"tags.mlflow.runName = '{run_name}'"
-                )
-                if runs:
-                    run_id = runs[0].info.run_id
-                    logger.info(f"Found existing run: {run_id}")
-                    return True, run_id
-            
-            return True, None
-            
-        return False, None
-    except ImportError:
-        logger.info("MLflow not available - metrics will not be logged")
-        return False, None
-
-def test(args: argparse.Namespace) -> Dict[str, Any]:
-    """Run inference and evaluation on test dataset."""
     test_start_time = time.time()
     
+    # Setup
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     logger.info(f"Using device: {device}")
-
-    # Setup MLflow if requested
+    
+    # Setup MLflow
     use_mlflow, run_id = setup_mlflow(
         experiment_name=args.mlflow_experiment_name,
-        tracking_uri=args.mlflow_tracking_uri,
-        run_name=args.run_name
+        run_name=args.run_name,
+        tracking_uri=args.mlflow_tracking_uri
     )
-
+    
     # Start MLflow run if enabled
     if use_mlflow:
         if run_id:
             mlflow.start_run(run_id=run_id)
         else:
             mlflow.start_run(run_name=args.run_name)
-
+    
     try:
         # Load test data
         data_path = Path(args.data_dir) / args.data_file
@@ -151,17 +133,22 @@ def test(args: argparse.Namespace) -> Dict[str, Any]:
         df = df.dropna(subset=['value'])
 
         logger.info(f"Loaded {len(df)} test samples (removed {n_missing} missing values)")
-
-        # Create dataset
-        dataset = FlowPhotoDataset(df, args.images_dir)
-
+        
         # Load model
         model_path = Path(args.model_dir) / "model.pth"
         model = load_model(model_path, device)
-
+        
+        # Create dataset
+        dataset = FlowPhotoDatasetWithAuxiliary(
+            df,
+            args.images_dir,
+            model.module.auxiliary_features,
+            transform=model.module.transforms['eval']
+        )
+        
         # Generate predictions
         scores = predict_batch(model, dataset, device)
-        df['score'] = scores
+        df['score'] = pd.Series(scores)
 
         # Calculate timing metrics
         total_test_time = time.time() - test_start_time
@@ -169,7 +156,7 @@ def test(args: argparse.Namespace) -> Dict[str, Any]:
 
         # Compute evaluation metrics
         metrics = evaluate_rank_predictions(
-            scores=scores,
+            scores=df['score'].values,
             values=df['value'].values,
             n_buckets=args.num_buckets
         )
@@ -283,13 +270,6 @@ def test(args: argparse.Namespace) -> Dict[str, Any]:
         if use_mlflow:
             mlflow.end_run()
 
-def format_time(seconds: float) -> str:
-    """Format time in seconds to hours:minutes:seconds."""
-    hours = int(seconds // 3600)
-    minutes = int((seconds % 3600) // 60)
-    seconds = int(seconds % 60)
-    return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
-
 def parse_args() -> argparse.Namespace:
     """Parse command line arguments."""
     parser = argparse.ArgumentParser()
@@ -350,12 +330,12 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="MLflow run name to associate metrics with training run"
     )
-
+    
     return parser.parse_args()
 
 if __name__ == "__main__":
     args = parse_args()
-    
+
     # Create output directory
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)

@@ -3,43 +3,76 @@ epochs: 30
 lr: 0.001
 unfreeze_after: 2
 batch_size: 64
-random_seed: 1691
+eval_batch_size: null  # uses training batch size if null
 
 # Optimizer parameters
 momentum: 0.9
 scheduler_patience: 1
 scheduler_factor: 0.5
 
+# Model architecture parameters
+resnet_size: 18
+truncate: 2
+dropout_rate: 0.0
+use_batch_norm: false
+weight_init: "none"  # choices: none, kaiming, xavier, normal
+
 # Transform parameters
-num_image_stats: 1000
 input_size: 480
-decolorize: false
-normalize: true
-augment: true
+crop_ratio: 0.8
+
+# Basic transforms
+transform_grayscale: false
+transform_normalize: true
+transform_normalize_n: 1000
+transform_random_crop: true
+transform_flip: false
+
+# Rotation transform
+transform_rotate: true
+transform_rotate_degrees: 10
+
+# Color jitter transforms
+transform_color_jitter: false
+transform_color_jitter_brightness: 0.2
+transform_color_jitter_contrast: 0.2
+transform_color_jitter_saturation: 0.2
+transform_color_jitter_hue: 0.1
+
+# Perspective transform
+transform_perspective: false
+transform_perspective_distortion: 0.2
+
+# Contrast/Histogram transforms
+transform_auto_contrast: false
+transform_equalize: false
+
+# Gamma transform
+transform_gamma: false
+transform_gamma_min: 0.8
+transform_gamma_max: 1.2
+
+# Blur transform
+transform_gaussian_blur: false
+transform_blur_kernel: 3
 
 # Data parameters
 num_workers: 4
 data_file: "train-pairs.csv"
 
-# Model parameters
-resnet_size: 18
-truncate: 2
-
-# Transform parameters
-crop_ratio: 0.8
-rotation_degrees: 10
-
-# Validation parameters
-eval_batch_size: null  # uses training batch size if null
-
 # Checkpoint parameters
 save_frequency: 1
-keep_n_checkpoints: -1
-
-# MLflow parameters
-# mlflow_tracking_uri: "http://localhost:5000"
-# mlflow_experiment_name: "default_experiment"
+keep_n_checkpoints: -1  # -1 keeps all checkpoints
 
 # Early stopping parameters
 early_stopping_patience: 5
 early_stopping_min_delta: 0.0001
+
+# MLflow parameters (commented out by default)
+# mlflow_tracking_uri: "http://localhost:5000"
+# mlflow_experiment_name: "default_experiment"
+# mlflow_run_name: null
+
+# Reproducibility parameters
+deterministic: false
+random_seed: 1691
