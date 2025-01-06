@@ -1,3 +1,5 @@
+library(tidyverse)
+
 generate_report <- function (station_id, model_code, directory = "/mnt/d/fpe/rank") {
   cat("generating report:", station_id, "\n")
 
@@ -19,10 +21,10 @@ generate_report <- function (station_id, model_code, directory = "/mnt/d/fpe/ran
   print(paste0("Report saved: ", target_filename))
 }
 
-generate_report(9, "RANK-FLOW-20240410")
+generate_report(257, "RANK-FLOW-20241213")
 
-station_ids <- read_csv("/mnt/d/fpe/rank/stations-20240613-3.txt", col_names = "station_id")$station_id
-walk(station_ids, \(x) generate_report(x, "RANK-FLOW-20240613"))
+station_ids <- read_csv("/mnt/d/fpe/rank/stations-20241212.txt", col_names = "station_id")$station_id
+walk(station_ids, \(x) generate_report(x, "RANK-FLOW-20241212"))
 
 # all runs in csv file
 runs <- read_csv("/mnt/d/fpe/rank/model-runs.csv")

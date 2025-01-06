@@ -1,6 +1,6 @@
 # create database rows for model
 # usage: Rscript rank-model-db.R --help
-# example: Rscript rank-model-db.R -t RANK -v FLOW_CFS -c RANK-FLOW-20240613 -s https://usgs-chs-conte-prod-fpe-storage.s3.us-west-2.amazonaws.com/models /mt/d/fpe/rank/stations.txt
+# example: Rscript rank-model-db.R -t RANK -v FLOW_CFS -c RANK-FLOW-20240613 -s https://usgs-chs-conte-prod-fpe-storage.s3.us-west-2.amazonaws.com/models /mnt/d/fpe/rank/stations.txt
 
 Sys.setenv(TZ = "GMT")
 

@@ -168,7 +168,7 @@ Next, create the full image and annotation datasets for a given station using th
 ```sh
 cd r
 Rscript rank-dataset.R --help # list arguments
-Rscript rank-dataset -d ~/data/fpe -s 29 -v FLOW_CFS -o RANK-FLOW-20240709
+Rscript rank-dataset.R -d ~/data/fpe -s 29 -v FLOW_CFS -o RANK-FLOW-20240709
 # -d is root directory for model files
 # -s is the station ID (see stations table in database)
 # -v is the variable code (see variables table in database, though right now we are only focused on FLOW_CFS)

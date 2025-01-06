@@ -26,9 +26,9 @@ suppressPackageStartupMessages({
 knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE, fig.width = 12)
 
 # params <- list(
-#   directory = "/mnt/d/fpe/rank",
-#   station_id = 46,
-#   model_code = "RANK-FLOW-20240613"
+#  directory = "/mnt/d/fpe/rank",
+#  station_id = 44,
+#  model_code = "RANK-FLOW-20241212"
 # )
 
 station_dir <- file.path(params$directory, params$station_id)
@@ -119,9 +119,14 @@ predictions_day <- predictions %>%
     .groups = "drop"
   ) %>%
   mutate(
-    rank_obs = rank(value) / n(),
     rank_pred = rank(score) / n()
   )
+has_obs_day <- !is.na(predictions_day$value)
+n_obs_day <- sum(has_obs_day)
+predictions_day$rank_obs <- NA_real_
+if (n_obs_day > 0) {
+  predictions_day$rank_obs[has_obs_day] <- (rank(predictions_day$value[has_obs_day]) - 1) / (n_obs_day - 1)
+}
   
 if (any(!is.na(predictions$value))) {
   safe_cor <- possibly(cor, otherwise = NA_real_)
@@ -591,38 +596,68 @@ Performance (Kendall Tau):
   Overall:       `r sprintf("%.2f", tau_day["total"])`
 ```
 
-```{r day_ts, fig.height=4}
-if (any(!is.na(predictions_day$value))) {
-  predictions_day %>%
-    complete(date = seq.Date(min(date), max(date), 1)) %>%
+
+```{r day_ts, fig.height=8, warning=FALSE}
+predictions_day %>% 
+  select(date, value, score) %>% 
+  mutate(value = log10(value)) %>% 
+  pivot_longer(-date) %>% 
+  ggplot(aes(date, value)) +
+  geom_line() +
+  facet_wrap(vars(name), scales = "free_y", ncol = 1, labeller = labeller(name = c(
+    "score" = "Predicted Model Score",
+    "value" = "Observed log10(Flow)"
+  ))) +
+  scale_x_date(date_labels = "%b %Y", date_breaks = "2 months", expand = expansion()) +
+  labs(x = NULL, y = "Model Score or log10(Obs. Flow)") +
+  theme_bw() +
+  theme(
+    axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)
+  ) 
+```
+
+```{r day_ts_rank, fig.height=8, warning=FALSE}
+predictions_day %>% 
+  select(date, rank_obs, rank_pred) %>% 
+  pivot_longer(-date) %>% 
+  mutate(name = fct_rev(fct_inorder(name))) %>% 
+  ggplot(aes(date, value)) +
+  geom_line() +
+  facet_wrap(vars(name), scales = "free_y", ncol = 1, labeller = labeller(name = c(
+    "rank_pred" = "Rank(Predicted Model Score)",
+    "rank_obs" = "Rank(Observed Flow)"
+  ))) +
+  scale_x_date(date_labels = "%b %Y", date_breaks = "2 months", expand = expansion()) +
+  scale_y_continuous(breaks = scales::pretty_breaks(n = 8), labels = scales::percent_format(accuracy = 1), expand = expansion()) +
+  labs(x = NULL, y = "Rank") +
+  theme_bw() +
+  theme(
+    axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)
+  ) 
+```
+
+```{r day_ts_overlap, fig.height=4}
+predictions_day_overlap <- predictions_day %>%
+  filter(!is.na(value), !is.na(score)) %>% 
+  mutate(
+    rank_obs = (rank(value) - 1) / (n() - 1),
+    rank_pred = (rank(score) - 1) / (n() - 1)
+  )
+if (nrow(predictions_day_overlap) > 0) {
+  predictions_day_overlap %>% 
+    complete(date = seq.Date(min(date), max(date), 1)) %>% 
     ggplot(aes(date)) +
-    geom_line(aes(y = rank_pred, linetype = "Predicted"), color = "black") +
-    geom_point(aes(y = rank_obs, color = split), size = 1) +
-    scale_color_brewer("Split", palette = "Set1", labels = split_labels) +
+    geom_line(aes(y = rank_pred, color = "Predicted")) +
+    geom_line(aes(y = rank_obs, color = "Observed")) +
     scale_x_date(date_labels = "%b %Y", date_breaks = "2 months", expand = expansion()) +
+    scale_color_brewer(palette = "Set1") +
     scale_y_continuous(breaks = scales::pretty_breaks(n = 8), labels = scales::percent_format(accuracy = 1), expand = expansion()) +
     labs(
       x = "Date",
       y = "Percentile Rank",
-      linetype = NULL,
-      title = "Daily Timeseries of Observed and Predicted Ranks"
-    ) +
-    theme_bw() +
-    theme(
-      axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)
-    ) 
-} else if (nrow(predictions_day) > 1) {
-  predictions_day %>%
-    complete(date = seq.Date(min(date), max(date), 1)) %>%
-    ggplot(aes(date)) +
-    geom_line(aes(y = rank_pred, linetype = "Predicted"), color = "black") +
-    scale_x_date(date_labels = "%b %Y", date_breaks = "2 months", expand = expansion()) +
-    scale_y_continuous(breaks = scales::pretty_breaks(n = 8), labels = scales::percent_format(accuracy = 1), expand = expansion()) +
-    labs(
-      x = "Date",
-      y = "Percentile Rank",
-      linetype = NULL,
-      title = "Daily Timeseries of Predicted Ranks"
+      color = NULL,
+      title = "Daily Timeseries of Observed and Predicted Ranks",
+      subtitle = "Ranks only computed for from dates having both observed and predicted values for comparison, may differ from above"
     ) +
     theme_bw() +
     theme(
@@ -635,8 +670,8 @@ if (any(!is.na(predictions_day$value))) {
 
 
 ```{r day_splot, fig.height=4}
-if (any(!is.na(predictions_day$value))) {
-  predictions_day %>%
+if (nrow(predictions_day_overlap) > 0) {
+  predictions_day_overlap %>%
     ggplot(aes(rank_obs, rank_pred)) +
     geom_point(aes(color = split), size = 1, alpha = 0.5) +
     geom_abline(color = "black") +
@@ -648,7 +683,6 @@ if (any(!is.na(predictions_day$value))) {
       y = "Predicted Rank",
       title = "Observed vs. Predicted Daily Ranks"
     ) +
-    facet_wrap(vars(split), nrow = 1, labeller = labeller(split = split_labels)) +
     theme_bw() +
     theme(
       axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5),
