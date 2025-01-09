@@ -153,6 +153,11 @@ images_01 %>%
   ) %>%
   write_file(file.path(exp_dir, "runs", "01", "input", "manifest.json"))
 
+images_01 %>%
+  pull(filename) %>%
+  unique() %>%
+  write_lines(file.path(exp_dir, "images", "images.txt"))
+
 metrics_01 <- read_csv(file.path(exp_dir, "runs", "01", "output", "data", "metrics.csv"))
 
 metrics_01 %>%
@@ -206,5 +211,3 @@ pred_01 %>%
   geom_boxplot() +
   geom_jitter(aes(color = split), height = 0, width = 0.2, alpha = 0.5) +
   facet_wrap(vars(site_split), labeller = label_both)
-
-
