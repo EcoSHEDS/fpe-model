@@ -488,13 +488,17 @@ def train(args: argparse.Namespace) -> None:
     with open(output_data_dir / "args.json", "w") as f:
         json.dump(vars(args), f, indent=2)
 
-    logger.info("Loading dataset from %s", Path(args.data_dir) / args.pairs_file)
+    if args.skip_train and not args.pretrained_model_path:
+        raise ValueError("Cannot skip training without a pretrained model")
 
-    df = pd.read_csv(Path(args.data_dir) / args.pairs_file)
-    train_df = df[df['split'] == "train"]
-    val_df = df[df['split'] == "val"]
-    logger.info("Dataset loaded - Train: %d samples, Validation: %d samples", 
-                len(train_df), len(val_df))
+    # Only load pairs dataset if we're training
+    if not args.skip_train:
+        logger.info("Loading dataset from %s", Path(args.data_dir) / args.pairs_file)
+        df = pd.read_csv(Path(args.data_dir) / args.pairs_file)
+        train_df = df[df['split'] == "train"]
+        val_df = df[df['split'] == "val"]
+        logger.info("Dataset loaded - Train: %d samples, Validation: %d samples", 
+                    len(train_df), len(val_df))
 
     # If using pretrained model, load its parameters and transforms
     if args.pretrained_model_path:
@@ -540,30 +544,31 @@ def train(args: argparse.Namespace) -> None:
             ])
         }
 
-    train_ds = FlowPhotoRankDataset(
-        train_df,
-        args.images_dir,
-        transform=transforms["train"]
-    )
-    val_ds = FlowPhotoRankDataset(
-        val_df,
-        args.images_dir,
-        transform=transforms["eval"]
-    )
+    if not args.skip_train:
+        train_ds = FlowPhotoRankDataset(
+            train_df,
+            args.images_dir,
+            transform=transforms["train"]
+        )
+        val_ds = FlowPhotoRankDataset(
+            val_df,
+            args.images_dir,
+            transform=transforms["eval"]
+        )
 
-    train_dl = DataLoader(
-        train_ds,
-        batch_size=args.batch_size,
-        shuffle=True,
-        num_workers=args.num_workers
-    )
-    eval_batch_size = args.eval_batch_size or args.batch_size
-    val_dl = DataLoader(
-        val_ds,
-        batch_size=eval_batch_size,
-        shuffle=False,
-        num_workers=args.num_workers
-    )
+        train_dl = DataLoader(
+            train_ds,
+            batch_size=args.batch_size,
+            shuffle=True,
+            num_workers=args.num_workers
+        )
+        eval_batch_size = args.eval_batch_size or args.batch_size
+        val_dl = DataLoader(
+            val_ds,
+            batch_size=eval_batch_size,
+            shuffle=False,
+            num_workers=args.num_workers
+        )
 
     model = ResNetRank(
         input_shape=(3, input_shape[0], input_shape[1]),
@@ -585,107 +590,110 @@ def train(args: argparse.Namespace) -> None:
         model.load_state_dict(checkpoint["model_state_dict"])
     model = model.to(device)
 
-    criterion = RankNetLoss()
-    optimizer = SGD(model.parameters(), lr=args.lr, momentum=args.momentum)
-    
-    if args.pretrained_model_path and args.load_optimizer_state:
-        optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
-        logger.info("Loaded optimizer state from checkpoint")
+    if not args.skip_train:
+        criterion = RankNetLoss()
+        optimizer = SGD(model.parameters(), lr=args.lr, momentum=args.momentum)
         
-    scheduler = ReduceLROnPlateau(
-        optimizer, "min", 
-        patience=args.scheduler_patience, 
-        factor=args.scheduler_factor
-    )
-
-    start_epoch = 0
-    logger.info(f"Starting training from epoch {start_epoch + 1} for up to {args.epochs} epochs")
-    metrics = {"epoch": [], "train_loss": [], "val_loss": []}
-    min_val_loss = float('inf')
-    best_epoch = None
-    total_train_time = 0
-    epoch_times = []
-    patience_counter = 0
-    
-    for epoch in range(start_epoch, args.epochs):
-        epoch_start_time = time.time()
-        logger.info("Epoch %d/%d", epoch + 1, args.epochs)
-        
-        start_time = time.time()
-        train_loss = fit(model, criterion, optimizer, train_dl, device)
-        train_time = time.time() - start_time
-        logger.info("Training - Loss: %.4f (%.1f s)", train_loss, train_time)
-        metrics["train_loss"].append(train_loss)
-        metrics["epoch"].append(epoch)
-
-        start_time = time.time()
-        val_loss = validate(model, [criterion], val_dl, device)[0]
-        val_time = time.time() - start_time
-        logger.info("Validation - Loss: %.4f (%.1f s)", val_loss, val_time)
-        metrics["val_loss"].append(val_loss)
-
-        epoch_time = time.time() - epoch_start_time
-        epoch_times.append(epoch_time)
-        total_train_time += epoch_time
-
-        old_lr = optimizer.param_groups[0]['lr']
-        scheduler.step(val_loss)
-        new_lr = optimizer.param_groups[0]['lr']
-        if old_lr != new_lr:
-            logger.info("Learning rate adjusted: %.6f -> %.6f", old_lr, new_lr)
-
-        checkpoint_path = Path(args.checkpoint_dir) / f"epoch_{epoch:02d}.pth"
-        save_checkpoint(
-            checkpoint_path, epoch, model, optimizer, train_loss,
-            transforms,
-            {
-                "aspect": aspect,
-                "input_shape": input_shape,
-                "img_sample_mean": img_mean,
-                "img_sample_std": img_std,
-                "args": args.__dict__
-            }
+        if args.pretrained_model_path and args.load_optimizer_state:
+            optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+            logger.info("Loaded optimizer state from checkpoint")
+            
+        scheduler = ReduceLROnPlateau(
+            optimizer, "min", 
+            patience=args.scheduler_patience, 
+            factor=args.scheduler_factor
         )
 
-        if val_loss < (min_val_loss - args.early_stopping_min_delta):
-            improvement = min_val_loss - val_loss
-            if epoch == 0:
-                logger.info("Initial checkpoint - Saving")
-            else:
-                logger.info("Model validation loss improved by %.4f - Saving checkpoint", improvement)
-            best_model_path = Path(args.model_dir) / "model.pth"
-            shutil.copy(checkpoint_path, best_model_path)
-            min_val_loss = val_loss
-            best_epoch = epoch
-            patience_counter = 0
-        else:
-            patience_counter += 1
-            logger.info("No improvement in validation loss for %d epochs", patience_counter)
+        start_epoch = 0
+        logger.info(f"Starting training from epoch {start_epoch + 1} for up to {args.epochs} epochs")
+        metrics = {"epoch": [], "train_loss": [], "val_loss": []}
+        min_val_loss = float('inf')
+        best_epoch = None
+        total_train_time = 0
+        epoch_times = []
+        patience_counter = 0
+        
+        for epoch in range(start_epoch, args.epochs):
+            epoch_start_time = time.time()
+            logger.info("Epoch %d/%d", epoch + 1, args.epochs)
             
-            if patience_counter >= args.early_stopping_patience:
-                logger.info("Early stopping triggered - No improvement for %d epochs", 
-                          args.early_stopping_patience)
-                break
+            start_time = time.time()
+            train_loss = fit(model, criterion, optimizer, train_dl, device)
+            train_time = time.time() - start_time
+            logger.info("Training - Loss: %.4f (%.1f s)", train_loss, train_time)
+            metrics["train_loss"].append(train_loss)
+            metrics["epoch"].append(epoch)
 
-        pd.DataFrame(metrics).to_csv(output_data_dir / "metrics.csv", index=False)
+            start_time = time.time()
+            val_loss = validate(model, [criterion], val_dl, device)[0]
+            val_time = time.time() - start_time
+            logger.info("Validation - Loss: %.4f (%.1f s)", val_loss, val_time)
+            metrics["val_loss"].append(val_loss)
 
-        # Backbone unfreezing
-        if (epoch + 1) == args.unfreeze_after:
-            logger.info("Unfreezing CNN backbone at epoch %d", epoch + 1)
-            for p in list(model.children())[0].parameters():
-                p.requires_grad = True
+            epoch_time = time.time() - epoch_start_time
+            epoch_times.append(epoch_time)
+            total_train_time += epoch_time
 
-    final_epoch = epoch + 1
-    if patience_counter >= args.early_stopping_patience:
-        logger.info("Training stopped early at epoch %d/%d", final_epoch, args.epochs)
+            old_lr = optimizer.param_groups[0]['lr']
+            scheduler.step(val_loss)
+            new_lr = optimizer.param_groups[0]['lr']
+            if old_lr != new_lr:
+                logger.info("Learning rate adjusted: %.6f -> %.6f", old_lr, new_lr)
+
+            checkpoint_path = Path(args.checkpoint_dir) / f"epoch_{epoch:02d}.pth"
+            save_checkpoint(
+                checkpoint_path, epoch, model, optimizer, train_loss,
+                transforms,
+                {
+                    "aspect": aspect,
+                    "input_shape": input_shape,
+                    "img_sample_mean": img_mean,
+                    "img_sample_std": img_std,
+                    "args": args.__dict__
+                }
+            )
+
+            if val_loss < (min_val_loss - args.early_stopping_min_delta):
+                improvement = min_val_loss - val_loss
+                if epoch == 0:
+                    logger.info("Initial checkpoint - Saving")
+                else:
+                    logger.info("Model validation loss improved by %.4f - Saving checkpoint", improvement)
+                best_model_path = Path(args.model_dir) / "model.pth"
+                shutil.copy(checkpoint_path, best_model_path)
+                min_val_loss = val_loss
+                best_epoch = epoch
+                patience_counter = 0
+            else:
+                patience_counter += 1
+                logger.info("No improvement in validation loss for %d epochs", patience_counter)
+                
+                if patience_counter >= args.early_stopping_patience:
+                    logger.info("Early stopping triggered - No improvement for %d epochs", 
+                              args.early_stopping_patience)
+                    break
+
+            pd.DataFrame(metrics).to_csv(output_data_dir / "metrics.csv", index=False)
+
+            # Backbone unfreezing
+            if (epoch + 1) == args.unfreeze_after:
+                logger.info("Unfreezing CNN backbone at epoch %d", epoch + 1)
+                for p in list(model.children())[0].parameters():
+                    p.requires_grad = True
+
+        final_epoch = epoch + 1
+        if patience_counter >= args.early_stopping_patience:
+            logger.info("Training stopped early at epoch %d/%d", final_epoch, args.epochs)
+        else:
+            logger.info("Training completed all %d epochs", args.epochs)
+
+        logger.info("Total training time: %s", format_time(total_train_time))
+        logger.info("Average epoch time: %s", 
+                    format_time(sum(epoch_times) / len(epoch_times)))
+        logger.info("Best epoch: %d", best_epoch)
+        logger.info("Training completed")
     else:
-        logger.info("Training completed all %d epochs", args.epochs)
-
-    logger.info("Total training time: %s", format_time(total_train_time))
-    logger.info("Average epoch time: %s", 
-                format_time(sum(epoch_times) / len(epoch_times)))
-    logger.info("Best epoch: %d", best_epoch)
-    logger.info("Training completed")
+        logger.info("Skipping training phase")
 
     logger.info("Generating predictions")
 
@@ -725,7 +733,7 @@ def train(args: argparse.Namespace) -> None:
     metrics.append(global_metrics)
 
     # compute tau, rho, mae, rmse for each split in df
-    for split in df['split'].unique():
+    for split in test_df['split'].unique():
         split_df = test_df[test_df['split'] == split]
         split_metrics = {}
         split_metrics["split"] = split
@@ -760,6 +768,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--load-optimizer-state", action="store_true",
         help="whether to load optimizer state from pretrained model"
+    )
+    parser.add_argument(
+        "--skip-train", action="store_true",
+        help="skip training and only compute predictions"
     )
 
     parser.add_argument("--num-workers", type=int, default=4, help="number of data loader workers")

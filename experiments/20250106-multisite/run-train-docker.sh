@@ -1,6 +1,7 @@
 #!/bin/bash
 
 PRETRAINED=false
+SKIP_TRAIN=false
 RUN=""
 
 # Parse named arguments
@@ -10,13 +11,17 @@ while [[ $# -gt 0 ]]; do
             PRETRAINED=true
             shift
             ;;
+        --skip-train)
+            SKIP_TRAIN=true
+            shift
+            ;;
         --run)
             RUN="$2"
             shift 2
             ;;
         *)
             echo "Unknown argument: $1"
-            echo "Usage: $0 --run <run_number> [--pretrained]"
+            echo "Usage: $0 --run <run_number> [--pretrained] [--skip-train]"
             exit 1
             ;;
     esac
@@ -24,7 +29,7 @@ done
 
 if [ -z "$RUN" ]; then
     echo "Error: Run number is required"
-    echo "Usage: $0 --run <run_number> [--pretrained]"
+    echo "Usage: $0 --run <run_number> [--pretrained] [--skip-train]"
     exit 1
 fi
 
@@ -59,6 +64,10 @@ CMD_ARGS="python train-rank.py"
 
 if [ "$PRETRAINED" = true ]; then
     CMD_ARGS="$CMD_ARGS --pretrained-model-path /opt/ml/input/data/data/model.pth --load-optimizer-state"
+fi
+
+if [ "$SKIP_TRAIN" = true ]; then
+    CMD_ARGS="$CMD_ARGS --skip-train"
 fi
 
 docker run -it \

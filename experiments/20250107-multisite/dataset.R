@@ -67,14 +67,15 @@ images <- stations %>%
   filter(n_images > 1000)
 
 
-# run 01 ------------------------------------------------------------------
+# base run ------------------------------------------------------------------
+# train regression model on obs. flow
 # test: last 1 months (n=100)
 # train/val: all but last 2 months (n=120)
 
 set.seed(2102)
 
 test_station_ids <- sample(images$id, size = 10, replace = FALSE)
-images_01 <- images %>%
+images_base <- images %>%
   select(affiliation_code, id, name, data) %>%
   mutate(
     site_split = if_else(id %in% test_station_ids, "test", "train")
@@ -120,52 +121,52 @@ images_01 <- images %>%
   ) %>%
   unnest(data)
 
-images_01 %>%
+images_base %>%
   tabyl(split, site_split) %>%
   adorn_totals(where = "both")
 
-summary(images_01)
+summary(images_base)
 
-images_01 %>%
+images_base %>%
   ggplot(aes(timestamp, value)) +
   geom_point(aes(color = split), size = 0.5) +
   facet_wrap(vars(name), scales = "free")
 
-images_01 %>%
+images_base %>%
   ggplot(aes(value)) +
   stat_ecdf(aes(color = split)) +
   facet_wrap(vars(name), scales = "free")
 
-images_01 %>%
+images_base %>%
   ggplot(aes(value)) +
   stat_ecdf(aes(color = split))
 
-dir.create(file.path(exp_dir, "runs", "01", "input"), recursive = TRUE)
-images_01 %>%
-  write_csv(file.path(exp_dir, "runs", "01", "input", "images.csv"))
+dir.create(file.path(exp_dir, "runs", "base", "input"), recursive = TRUE)
+images_base %>%
+  write_csv(file.path(exp_dir, "runs", "base", "input", "images.csv"))
 
-images_01 %>%
+images_base %>%
   pull(filename) %>%
   unique() %>%
   toJSON(auto_unbox = TRUE) %>%
   str_replace(
     "\\[", "[{\"prefix\": \"s3://usgs-chs-conte-prod-fpe-storage/\"},"
   ) %>%
-  write_file(file.path(exp_dir, "runs", "01", "input", "manifest.json"))
+  write_file(file.path(exp_dir, "runs", "base", "input", "manifest.json"))
 
-images_01 %>%
+images_base %>%
   pull(filename) %>%
   unique() %>%
   write_lines(file.path(exp_dir, "images", "images.txt"))
 
-metrics_01 <- read_csv(file.path(exp_dir, "runs", "01", "output", "data", "metrics.csv"))
+metrics_base <- read_csv(file.path(exp_dir, "runs", "base", "output", "data", "metrics.csv"))
 
-metrics_01 %>%
+metrics_base %>%
   ggplot(aes(epoch)) +
   geom_line(aes(y = train_loss, color = "train")) +
   geom_line(aes(y = val_loss, color = "val"))
 
-pred_01 <- read_csv(file.path(exp_dir, "runs", "01", "output", "data", "predictions.csv")) %>%
+pred_base <- read_csv(file.path(exp_dir, "runs", "base", "output", "data", "predictions.csv")) %>%
   arrange(desc(site_split), station_name, timestamp) %>%
   mutate(
     station_name = fct_inorder(station_name),
@@ -173,7 +174,7 @@ pred_01 <- read_csv(file.path(exp_dir, "runs", "01", "output", "data", "predicti
     split = factor(split, levels = c("train", "val", "test-in", "test-out"))
   )
 
-pred_01 %>%
+pred_base %>%
   ggplot(aes(value, prediction)) +
   geom_abline() +
   geom_point(aes(color = split), size = 0.5) +
@@ -181,33 +182,63 @@ pred_01 %>%
   facet_wrap(vars(station_name)) +
   theme(aspect.ratio = 1)
 
-pred_01 %>%
+pred_base %>%
   ggplot(aes(value, prediction)) +
   geom_abline() +
   geom_point(aes(color = split), size = 0.5) +
   geom_blank(aes(prediction, value)) +
-  facet_grid(vars(site_split), vars(split)) +
+  facet_grid(vars(site_split), vars(split), labeller = label_both) +
   theme(aspect.ratio = 1)
 
-pred_01 %>%
+pred_base %>%
   ggplot(aes(timestamp)) +
   geom_line(aes(y = value)) +
   geom_point(aes(y = prediction, color = split), size = 0.5) +
   facet_wrap(vars(station_name), scales = "free")
 
-pred_01 %>%
+pred_base %>%
   group_by(site_split, split) %>%
   summarise(
     tau = cor(value, prediction, method = "kendall")
   ) %>%
-  pivot_wider(names_from = "site_split", values_from = "tau")
+  pivot_wider(names_from = "site_split", values_from = "tau") %>%
+  knitr::kable(digits = 3)
 
-pred_01 %>%
+pred_base %>%
   group_by(site_split, station_name, split) %>%
   summarise(
     tau = cor(value, prediction, method = "kendall")
   ) %>%
   ggplot(aes(split, tau)) +
+  geom_hline(yintercept = 0) +
   geom_boxplot() +
   geom_jitter(aes(color = split), height = 0, width = 0.2, alpha = 0.5) +
+  scale_y_continuous(breaks = scales::pretty_breaks(n = 8), limits = c(-0.5, 1)) +
   facet_wrap(vars(site_split), labeller = label_both)
+
+
+# fine tune each station --------------------------------------------------
+# for each station, fine tune using 200 pairs
+
+stn_annotations <- stations %>%
+  mutate(
+    data = list({
+      stn_dir <- file.path(exp_dir, "stations", station_id, "data")
+      read_csv(annotations)
+    })
+  )
+
+for (station_id in stations$station_id) {
+  print(station_id)
+  stn_dir <- file.path(exp_dir, "runs", glue("station-{station_id}"))
+  dir.create(file.path(stn_dir, "input"), showWarnings = FALSE, recursive = TRUE)
+  dir.create(file.path(stn_dir, "output", "data"), showWarnings = FALSE, recursive = TRUE)
+  dir.create(file.path(stn_dir, "output", "model"), showWarnings = FALSE, recursive = TRUE)
+
+  stn_images <- images_base %>%
+    filter(station_id == !!station_id)
+}
+
+
+
+
