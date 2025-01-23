@@ -1,2 +1,7 @@
 */stations/
 */runs/
+*/images
+*/cache
+*.rds
+*.png
+._*

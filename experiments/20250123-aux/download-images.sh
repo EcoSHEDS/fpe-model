@@ -10,7 +10,7 @@ fi
 INPUT_FILE="$1"
 BUCKET_NAME="$2"
 IMAGES_ROOT="."  # Default to current directory
-MAX_PARALLEL=10  # Maximum number of parallel downloads
+MAX_PARALLEL=20  # Maximum number of parallel downloads
 
 # Parse optional arguments
 shift 2

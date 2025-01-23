@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>FPE Image Viewer</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/luxon@^2"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-luxon@^1"></script>
+    <style>
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            font-family: Arial, sans-serif;
+        }
+        .dashboard {
+            display: grid;
+            grid-template-columns: 2fr 1fr;
+            gap: 20px;
+            margin-top: 20px;
+        }
+        .charts {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+        .chart-container {
+            background: #f5f5f5;
+            padding: 20px;
+            border-radius: 8px;
+            height: 300px;
+        }
+        .image-preview {
+            background: #f5f5f5;
+            padding: 20px;
+            border-radius: 8px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            position: sticky;
+            top: 20px;
+        }
+        .image-preview img {
+            max-width: 100%;
+            max-height: 300px;
+            object-fit: contain;
+        }
+        .file-input {
+            margin-bottom: 20px;
+        }
+        .loading {
+            display: none;
+            margin: 10px 0;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Timeseries Dashboard</h1>
+        <div class="file-input">
+            <input type="file" id="csvFile" accept=".csv">
+            <div class="loading" id="loading">Loading data...</div>
+        </div>
+        <div class="dashboard">
+            <div class="charts">
+                <div class="chart-container">
+                    <canvas id="timeseriesChart"></canvas>
+                </div>
+                <div class="chart-container">
+                    <canvas id="cfdChart"></canvas>
+                </div>
+            </div>
+            <div class="image-preview">
+                <h3>Image Preview</h3>
+                <img id="preview" src="/api/placeholder/400/300" alt="Hover over a point to see the image">
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let timeseriesChart = null;
+        let cfdChart = null;
+        let currentData = null;
+
+        document.getElementById('csvFile').addEventListener('change', handleFileSelect);
+
+        function handleFileSelect(event) {
+            const file = event.target.files[0];
+            if (file) {
+                const loading = document.getElementById('loading');
+                loading.style.display = 'block';
+                
+                const reader = new FileReader();
+                reader.onload = function(e) {
+                    parseCSV(e.target.result);
+                    loading.style.display = 'none';
+                };
+                reader.readAsText(file);
+            }
+        }
+
+        function parseCSV(csv) {
+            const lines = csv.split('\n');
+            const headers = lines[0].split(',').map(h => h.trim());
+            
+            currentData = lines.slice(1)
+                .filter(line => line.trim())
+                .map(line => {
+                    const values = line.split(',').map(v => v.trim());
+                    return {
+                        timestamp: new Date(values[headers.indexOf('timestamp')]),
+                        value: parseFloat(values[headers.indexOf('value')]),
+                        url: values[headers.indexOf('url')]
+                    };
+                })
+                .sort((a, b) => a.timestamp - b.timestamp);
+
+            createCharts();
+        }
+
+        function computeCFD(data) {
+            // Sort values in ascending order
+            const sortedValues = data.map(d => d.value).sort((a, b) => a - b);
+            const n = sortedValues.length;
+            
+            // Compute cumulative frequencies
+            return sortedValues.map((value, index) => ({
+                value: value,
+                frequency: (index + 1) / n,
+                url: data.find(d => d.value === value).url
+            }));
+        }
+
+        function createCharts() {
+            // Create timeseries chart
+            const timeseriesEl = document.getElementById('timeseriesChart');
+            if (timeseriesChart) {
+                timeseriesChart.destroy();
+            }
+
+            timeseriesChart = new Chart(timeseriesEl, {
+                type: 'line',
+                data: {
+                    labels: currentData.map(d => d.timestamp),
+                    datasets: [{
+                        label: 'Value over Time',
+                        data: currentData.map(d => d.value),
+                        borderColor: 'rgb(75, 192, 192)',
+                        tension: 0.1,
+                        pointRadius: 3,
+                        pointHoverRadius: 8
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    interaction: {
+                        intersect: true,
+                        mode: 'nearest'
+                    },
+                    scales: {
+                        x: {
+                            type: 'time',
+                            time: {
+                                unit: 'day'
+                            },
+                            title: {
+                                display: true,
+                                text: 'Time'
+                            }
+                        },
+                        y: {
+                            title: {
+                                display: true,
+                                text: 'Value'
+                            }
+                        }
+                    },
+                    onHover: (event, elements) => {
+                        if (elements && elements.length > 0) {
+                            const dataIndex = elements[0].index;
+                            const imageUrl = currentData[dataIndex].url.replace('/images/', '/thumbs/');
+                            document.getElementById('preview').src = imageUrl;
+                        }
+                    }
+                }
+            });
+
+            // Create CFD chart
+            const cfdEl = document.getElementById('cfdChart');
+            if (cfdChart) {
+                cfdChart.destroy();
+            }
+
+            const cfdData = computeCFD(currentData);
+            
+            cfdChart = new Chart(cfdEl, {
+                type: 'line',
+                data: {
+                    labels: cfdData.map(d => d.value),
+                    datasets: [{
+                        label: 'Cumulative Frequency Distribution',
+                        data: cfdData.map(d => d.frequency),
+                        borderColor: 'rgb(153, 102, 255)',
+                        tension: 0.1,
+                        pointRadius: 3,
+                        pointHoverRadius: 8
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    interaction: {
+                        intersect: true,
+                        mode: 'nearest'
+                    },
+                    scales: {
+                        x: {
+                            title: {
+                                display: true,
+                                text: 'Value'
+                            }
+                        },
+                        y: {
+                            title: {
+                                display: true,
+                                text: 'Cumulative Frequency'
+                            },
+                            min: 0,
+                            max: 1
+                        }
+                    },
+                    onHover: (event, elements) => {
+                        if (elements && elements.length > 0) {
+                            const dataIndex = elements[0].index;
+                            const imageUrl = cfdData[dataIndex].url.replace('/images/', '/thumbs/');
+                            document.getElementById('preview').src = imageUrl;
+                        }
+                    }
+                }
+            });
+        }
+    </script>
+</body>
+</html>
