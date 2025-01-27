@@ -1,17 +1,16 @@
-setwd("~/git/fpe-model/experiments/20250122-ranknet-aux/")
+setwd("~/git/fpe-model/experiments/20250124-ranknet-aux-5k/")
 
 library(tidyverse)
 library(jsonlite)
 library(janitor)
 library(glue)
-library(ggimage)
 library(daymetr)
 library(openmeteo)
 library(yaml)
 library(patchwork)
 library(gt)
 
-experiment <- "20250122-ranknet-aux"
+experiment <- "20250124-ranknet-aux-5k"
 daytime_hours <- 8:16
 
 # stations ----------------------------------------------------------------
@@ -268,34 +267,34 @@ get_met <- function (location, start, end, hourly = NULL, daily = NULL, timezone
 #   timezone = "UTC"
 # )
 
-stations_met_raw <- stations %>%
-  mutate(
-    met_start = min(as_date(images_start)) - years(2),
-    met_end = max(as_date(images_end)) + days(10),
-    met_hr = list({
-      get_met(
-        location = c(station$latitude, station$longitude),
-        start = as.character(met_start),
-        end = as.character(met_end),
-        hourly = c(
-          "temperature_2m",
-          "relative_humidity_2m",
-          "pressure_msl",
-          "wind_speed_10m",
-          "shortwave_radiation",
-          "cloud_cover",
-          "rain",
-          "snowfall",
-          "et0_fao_evapotranspiration",
-          "vapour_pressure_deficit",
-          "soil_moisture_0_to_7cm",
-          "soil_moisture_100_to_255cm"
-        ),
-        timezone = "UTC"
-      )
-    })
-  )
-write_rds(stations_met_raw, "cache/stations-met-raw.rds")
+# stations_met_raw <- stations %>%
+#   mutate(
+#     met_start = min(as_date(images_start)) - years(2),
+#     met_end = max(as_date(images_end)) + days(10),
+#     met_hr = list({
+#       get_met(
+#         location = c(station$latitude, station$longitude),
+#         start = as.character(met_start),
+#         end = as.character(met_end),
+#         hourly = c(
+#           "temperature_2m",
+#           "relative_humidity_2m",
+#           "pressure_msl",
+#           "wind_speed_10m",
+#           "shortwave_radiation",
+#           "cloud_cover",
+#           "rain",
+#           "snowfall",
+#           "et0_fao_evapotranspiration",
+#           "vapour_pressure_deficit",
+#           "soil_moisture_0_to_7cm",
+#           "soil_moisture_100_to_255cm"
+#         ),
+#         timezone = "UTC"
+#       )
+#     })
+#   )
+# write_rds(stations_met_raw, "cache/stations-met-raw.rds")
 stations_met_raw <- read_rds("cache/stations-met-raw.rds")
 
 stations_met <- stations_met_raw %>%
@@ -722,33 +721,19 @@ stations_aux$aux_day_stats[[1]] %>%
   ggplot(aes(value)) +
   geom_histogram(binwidth = 0.05)
 
+
+# annotator ---------------------------------------------------------------
+
+
+
 # inputs --------------------------------------------------------------
 
-n_train_pairs <- 400
-n_val_pairs <- 100
+n_train_pairs <- 4000
+n_val_pairs <- 1000
 
-set.seed(2119)
+set.seed(1151)
 stations_inp <- stations %>%
   mutate(
-    pairs = list({
-      x_train <- pairs %>%
-        filter(file_downloaded_1 & file_downloaded_2) %>%
-        nest_by(pair) %>%
-        ungroup() %>%
-        slice_sample(n = n_train_pairs) %>%
-        unnest(data) %>%
-        mutate(split = "train")
-      x_val <- pairs %>%
-        filter(file_downloaded_1 & file_downloaded_2) %>%
-        filter(!pair %in% x_train$pair) %>%
-        nest_by(pair) %>%
-        ungroup() %>%
-        slice_sample(n = n_val_pairs) %>%
-        unnest(data) %>%
-        mutate(split = "val")
-
-      bind_rows(x_train, x_val)
-    }),
     images = list({
       x_train_pairs <- pairs %>%
         filter(split == "train")
@@ -770,29 +755,15 @@ stations_inp <- stations %>%
               data
             } else {
               n_total <- 1000
-              data_downloaded <- data %>%
-                filter(file_downloaded)
-              if (nrow(data_downloaded) > n_total) {
-                data_downloaded <- data_downloaded %>%
-                  slice_sample(n = n_total)
-              }
-              n_downloaded <- nrow(data_downloaded)
-              n_remaining <- n_total - n_downloaded
-              data_remaining <- data %>%
-                filter(!file_downloaded) %>%
-                slice_sample(n = n_remaining)
-              bind_rows(data_downloaded, data_remaining)
+              data %>%
+                slice_sample(n = n_total)
             }
           })
         ) %>%
         unnest(data)
     }),
     images_n = nrow(images),
-    images_n_downloaded = sum(images$file_downloaded),
-    images_n_missing = sum(!images$file_downloaded),
-    pairs_n = nrow(pairs) / 2,
-    pairs_n_downloaded = sum(pairs$file_downloaded_1 & pairs$file_downloaded_2) / 2,
-    pairs_n_missing = sum(!(pairs$file_downloaded_1 & pairs$file_downloaded_2)) / 2,
+    pairs_n = nrow(pairs) / 2
   ) %>%
   left_join(
     stations_aux %>%
@@ -802,10 +773,6 @@ stations_inp <- stations %>%
 
 summary(stations_inp$pairs_n)
 summary(stations_inp$images_n)
-stations_inp %>%
-  select(pairs_n, pairs_n_downloaded, pairs_n_missing)
-stations_inp %>%
-  select(images_n, images_n_downloaded, images_n_missing)
 
 # export list of images to download
 # then run download-images.sh
@@ -814,8 +781,7 @@ stations_inp %>%
   unnest(images) %>%
   filter(!file_downloaded) %>%
   pull(filename) %>%
-  length()
-  # write_lines("images.txt")
+  write_lines("images.txt")
 
 # ts: n pairs and n images by month
 # stations %>%
@@ -898,12 +864,12 @@ models <- tribble(
   "none",       NA,         NA,            NA,           NA,
   "concat",     "concat",   "H",           "aux_stats",  NA,
   "encoder",    "encoder",  "H",           "aux_stats",  NA,
-  "lstm-d-30",  "lstm",     "D",           "aux_day",    30,
+  # "lstm-d-30",  "lstm",     "D",           "aux_day",    30,
   "lstm-d-90",  "lstm",     "D",           "aux_day",    90,
-  "lstm-d-180", "lstm",     "D",           "aux_day",    180,
+  # "lstm-d-180", "lstm",     "D",           "aux_day",    180,
   "lstm-h-30",  "lstm",     "H",           "aux_hr",     30 * 24,
-  "lstm-h-60",  "lstm",     "H",           "aux_hr",     60 * 24,
-  "lstm-h-90",  "lstm",     "H",           "aux_hr",     90 * 24
+  # "lstm-h-60",  "lstm",     "H",           "aux_hr",     60 * 24,
+  # "lstm-h-90",  "lstm",     "H",           "aux_hr",     90 * 24
 )
 
 runs <- models %>%
@@ -957,7 +923,6 @@ for (i in 1:nrow(runs)) {
 # results -----------------------------------------------------------------
 
 pred <- runs %>%
-  filter(!model %in% c("lstm-d-30", "lstm-d-180", "lstm-h-60", "lstm-h-90")) %>%
   left_join(select(stations, station_id, station_code), by = "station_id") %>%
   select(model, station_id, station_code) %>%
   mutate(
@@ -979,9 +944,9 @@ pred <- runs %>%
       model == "concat" ~ "direct",
       model == "encoder" ~ "fcn",
       model == "lstm-d-90" ~ "lstm-day",
-      model == "lstm-h-30" ~ "lstm-hr"
+      model == "lstm-h-30" ~ "lstm-hour"
     ),
-    model = factor(model, levels = c("no aux", "direct", "fcn", "lstm-day", "lstm-hr"))
+    model = factor(model, levels = c("no aux", "direct", "fcn", "lstm-day", "lstm-hour"))
   )
 list(
   stations = stations,
@@ -990,7 +955,6 @@ list(
 ) %>%
   write_rds("cache/runs.rds")
 
-stations <- read_rds("cache/runs.rds")$stations
 pred <- read_rds("cache/runs.rds")$pred
 
 pred_tau <- pred %>%
@@ -1009,49 +973,7 @@ pred_tau <- pred %>%
   ) %>%
   ungroup()
 
-
-
-pred_tau_low <- pred %>%
-  unnest(data) %>%
-  group_by(model, )
-
-## memo ------------------------------------------------------------
-
-stations %>%
-  transmute(
-    affiliation = "USGS",
-    station_code,
-    latitude = round(station$latitude, 4),
-    longitude = round(station$longitude, 4),
-    image_start = as_date(images_start),
-    image_end = as_date(images_end),
-    images_duration_days = scales::comma(as.integer(images_duration_days)),
-    pairs_n = scales::comma(as.integer(pairs_n)),
-  ) %>%
-  write_csv("figs/stations.csv")
-
-set_seed(1052)
-p_images <- stations %>%
-  transmute(
-    station_code,
-    filename = {
-      f <- images %>%
-        filter(timestamp_hour == 12, file_downloaded) %>%
-        slice_sample(n = 1) %>%
-        pull(filename)
-      file.path("~/data/fpe/images", f)
-    }
-  ) %>%
-  ggplot(aes(0, 0)) +
-  geom_image(aes(image = filename), size = 1.2) +
-  facet_wrap(vars(station_code), ncol = 3) +
-  theme_void() +
-  theme(
-    panel.border = element_rect(colour = "black"),
-    panel.spacing.y = unit(1, "lines"),
-    strip.text = element_text(size = 12, face = "bold")
-  )
-ggsave("figs/station-images.png", plot = p_images, width = 12, height = 12)
+## memo figures ------------------------------------------------------------
 
 p <- pred_tau %>%
   ggplot(aes(fct_rev(model), tau)) +
@@ -1093,7 +1015,7 @@ p <- pred_tau %>%
     axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1),
     strip.text.y = element_text(size = 6)
   )
-ggsave("figs/tau-heat-station.png", plot = p, width = 10, height = 8)
+ggsave("figs/tau-heat-station.png", plot = p, width = 8, height = 4)
 
 p <- pred_tau %>%
   ggplot(aes(model, fct_rev(station_code))) +
@@ -1115,9 +1037,7 @@ pred_tau %>%
   filter(split == "all") %>%
   arrange(desc(median))
 
-
-p_29_z_ts <- pred %>%
-  filter(str_starts(station_code, "29-")) %>%
+p_z_ts <- pred %>%
   unnest(data) %>%
   mutate(split = factor(split, levels = c("train", "val", "test-in", "test-out"))) %>%
   group_by(model, station_code) %>%
@@ -1127,7 +1047,7 @@ p_29_z_ts <- pred %>%
   geom_line(aes(y = value, linetype = "obs. flow")) +
   geom_point(aes(y = prediction, color = split), size = 0.5, alpha = 0.5) +
   scale_color_brewer(palette = "Set1") +
-  facet_wrap(vars(model), ncol = 1, strip.position = "right") +
+  facet_grid(vars(model), vars(station_code), scales = "free_x") +
   guides(
     linetype = guide_legend(order = 2),
     color = guide_legend(order = 1)
@@ -1138,8 +1058,7 @@ p_29_z_ts <- pred %>%
   ) +
   theme_bw()
 
-p_29_z_splot <- pred %>%
-  filter(str_starts(station_code, "29-")) %>%
+p_z_splot <- pred %>%
   unnest(data) %>%
   mutate(split = factor(split, levels = c("train", "val", "test-in", "test-out"))) %>%
   group_by(model, station_code) %>%
@@ -1150,22 +1069,22 @@ p_29_z_splot <- pred %>%
   geom_point(aes(color = split), size = 0.5, alpha = 0.5) +
   geom_blank(aes(prediction, value)) +
   scale_color_brewer(palette = "Set1") +
-  facet_wrap(vars(model), ncol = 1, strip.position = "right") +
+  facet_grid(vars(model), vars(station_code), scales = "free_x", labeller = labeller(station_code = label_wrap_gen(width = 20))) +
   labs(
     x = "z(obs. flow)", y = "z(pred. score)",
     color = "image\nsplit"
   ) +
   theme_bw() +
   theme(
+    axis.text.y = element_blank(),
+    axis.title.y = element_blank()
     # aspect.ratio = 1
   )
-# p_29_z <- (p_29_z_ts | p_29_z_splot) +
-#   plot_layout(ncol = 2, widths = c(4, 1), guides = "collect")
-#
-# ggsave("figs/ts-splot-29-z.png", plot = p_29_z, width = 11, height = 10)
+p_z <- (p_z_ts | p_z_splot) +
+  plot_layout(ncol = 2, widths = c(3, 1), guides = "collect")
+ggsave("figs/ts-splot-z.png", plot = p_z, width = 14, height = 9)
 
-p_29_r_ts <- pred %>%
-  filter(str_starts(station_code, "29-")) %>%
+p_r_ts <- pred %>%
   unnest(data) %>%
   mutate(
     split = factor(split, levels = c("train", "val", "test-in", "test-out"))
@@ -1180,7 +1099,7 @@ p_29_r_ts <- pred %>%
   geom_point(aes(y = prediction, color = split), size = 0.5, alpha = 0.5) +
   scale_color_brewer(palette = "Set1") +
   scale_y_continuous(labels = scales::percent) +
-  facet_wrap(vars(model), ncol = 1, strip.position = "right") +
+  facet_grid(vars(model), vars(station_code), scales = "free_x") +
   guides(
     linetype = guide_legend(order = 2),
     color = guide_legend(order = 1)
@@ -1190,8 +1109,7 @@ p_29_r_ts <- pred %>%
     color = "image\nsplit", linetype = NULL
   ) +
   theme_bw()
-p_29_r_splot <- pred %>%
-  filter(str_starts(station_code, "29-")) %>%
+p_r_splot <- pred %>%
   unnest(data) %>%
   mutate(
     split = factor(split, levels = c("train", "val", "test-in", "test-out"))
@@ -1208,15 +1126,21 @@ p_29_r_splot <- pred %>%
   scale_color_brewer(palette = "Set1") +
   scale_x_continuous(labels = scales::percent) +
   scale_y_continuous(labels = scales::percent) +
-  facet_wrap(vars(model), ncol = 1, strip.position = "right") +
+  facet_grid(vars(model), vars(station_code), scales = "free_x", labeller = labeller(station_code = label_wrap_gen(width = 20))) +
   labs(
     x = "rank(obs. flow)", y = "rank(pred. score)",
     color = "image\nsplit"
   ) +
   theme_bw() +
   theme(
+    axis.text.y = element_blank(),
+    axis.title.y = element_blank()
     # aspect.ratio = 1
   )
+
+p_r <- (p_r_ts | p_r_splot) +
+  plot_layout(ncol = 2, widths = c(3, 1), guides = "collect")
+ggsave("figs/ts-splot-r.png", plot = p_r, width = 14, height = 9)
 
 p_29 <- wrap_plots(
   p_29_z_ts +
@@ -1236,8 +1160,7 @@ ggsave("figs/ts-splot-29.png", plot = p_29, width = 14, height = 9)
 
 
 # splot: by model
-p_1 <- pred %>%
-  filter(station_code %in% head(unique(pred$station_code), 6)) %>%
+p <- pred %>%
   unnest(data) %>%
   mutate(split = factor(split, levels = c("train", "val", "test-in", "test-out"))) %>%
   group_by(model, station_code) %>%
@@ -1258,82 +1181,7 @@ p_1 <- pred %>%
     strip.text.x = element_text(size = 6),
     aspect.ratio = 1
   )
-ggsave("figs/splot-stations-1.png", plot = p_1, width = 10, height = 8)
-
-p_2 <- pred %>%
-  filter(station_code %in% tail(unique(pred$station_code), 6)) %>%
-  unnest(data) %>%
-  mutate(split = factor(split, levels = c("train", "val", "test-in", "test-out"))) %>%
-  group_by(model, station_code) %>%
-  mutate(across(c(value, prediction), scale)) %>%
-  ungroup() %>%
-  ggplot(aes(value, prediction)) +
-  geom_abline() +
-  geom_point(aes(color = split), size = 0.5, alpha = 0.5) +
-  geom_blank(aes(prediction, value)) +
-  scale_color_brewer(palette = "Set1") +
-  facet_grid(vars(model), vars(station_code), labeller = labeller(station_code = label_wrap_gen())) +
-  labs(
-    x = "z(obs. flow)", y = "z(pred. score)",
-    color = "image\nsplit"
-  ) +
-  theme_bw() +
-  theme(
-    strip.text.x = element_text(size = 6),
-    aspect.ratio = 1
-  )
-ggsave("figs/splot-stations-2.png", plot = p_2, width = 10, height = 8)
-
-
-p_z <- pred %>%
-  unnest(data) %>%
-  mutate(split = factor(split, levels = c("train", "val", "test-in", "test-out"))) %>%
-  group_by(model, station_code) %>%
-  mutate(across(c(value, prediction), scale)) %>%
-  ungroup() %>%
-  ggplot(aes(value, prediction)) +
-  geom_abline() +
-  geom_point(aes(color = split), size = 0.5, alpha = 0.5) +
-  geom_blank(aes(prediction, value)) +
-  scale_color_brewer(palette = "Set1") +
-  facet_grid(vars(model), vars(station_code), labeller = labeller(station_code = label_wrap_gen(width = 20))) +
-  labs(
-    x = "z(obs. flow)", y = "z(pred. score)",
-    color = "image\nsplit"
-  ) +
-  theme_bw() +
-  theme(
-    strip.text.x = element_text(size = 6),
-    aspect.ratio = 1
-  )
-ggsave("figs/splot-stations-z.png", plot = p_z, width = 14, height = 6)
-
-
-p_r <- pred %>%
-  unnest(data) %>%
-  mutate(split = factor(split, levels = c("train", "val", "test-in", "test-out"))) %>%
-  group_by(model, station_code) %>%
-  mutate(across(c(value, prediction), ~ (rank(.) - 1) / (n() - 1))) %>%
-  ungroup() %>%
-  ggplot(aes(value, prediction)) +
-  geom_abline() +
-  geom_point(aes(color = split), size = 0.5, alpha = 0.25) +
-  geom_blank(aes(prediction, value)) +
-  scale_x_continuous(labels = scales::percent, breaks = c(0, 0.5, 1)) +
-  scale_y_continuous(labels = scales::percent, breaks = c(0, 0.5, 1)) +
-  scale_color_brewer(palette = "Set1") +
-  facet_grid(vars(model), vars(station_code), labeller = labeller(station_code = label_wrap_gen(width = 20))) +
-  labs(
-    x = "rank(obs. flow)", y = "rank(pred. score)",
-    color = "image\nsplit"
-  ) +
-  theme_bw() +
-  theme(
-    strip.text.x = element_text(size = 6),
-    axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1),
-    aspect.ratio = 1
-  )
-ggsave("figs/splot-stations-r.png", plot = p_r, width = 14, height = 6)
+ggsave("figs/splot-stations.png", plot = p, width = 14, height = 8)
 
 ## pdf: diagnostics --------------------------------------------------------
 
@@ -1355,48 +1203,10 @@ pred_tau_gt <- pred_tau %>%
   ungroup() %>%
   select(-data)
 
-
-create_image_grob <- function(image_path, resize_width = 800, ...) {
-  img <- load.image(image_path)
-  img <- resize(img, resize_width, resize_width * height(img) / width(img))
-  grid::rasterGrob(img, interpolate = TRUE, ...)
-}
-
-pred_img <- pred %>%
-  left_join(
-    stations %>%
-      transmute(
-        station_code,
-        timezone = station$timezone
-      ),
-    by = "station_code"
-  ) %>%
-  filter(model == "direct") %>%
-  mutate(
-    p_img = list({
-      f <- data %>%
-        filter(
-          hour(with_tz(timestamp, tz = timezone)) == 12,
-          file.exists(file.path("~/data/fpe/images", filename))
-        ) %>%
-        slice_sample(n = 1) %>%
-        pull(filename)
-      create_image_grob(
-        file.path("~/data/fpe/images", f),
-        resize_width = 400,
-        just = c("center", "top"),
-        y = unit(1, "npc")
-      )
-    })
-  ) %>%
-  ungroup() %>%
-  select(station_code, p_img)
-
 p_pdf_z <- pred %>%
   ungroup() %>%
   nest_by(station_code, .keep = TRUE) %>%
   left_join(pred_tau_gt, by = "station_code") %>%
-  left_join(pred_img, by = "station_code") %>%
   mutate(
     p_ts = list({
       data %>%
@@ -1447,21 +1257,10 @@ p_pdf_z <- pred %>%
         )
     }),
     p = list({
-      p1 <- wrap_plots(
-        p_ts,
-        p_splot,
-        ncol = 2,
-        widths = c(4, 1),
-        guides = "collect",
-        axes = "collect"
-      )
-      p2 <- wrap_plots(
-        p_img,
-        wrap_table(t_tau) + ggtitle("Kendall's tau"),
-        ncol = 2,
-        widths = c(1, 1)
-      )
-      wrap_plots(p1, p2, ncol = 1, heights = c(3, 1)) +
+      p <- (p_ts | p_splot) +
+        plot_layout(ncol = 2, widths = c(4, 1), guides = "collect")
+      (p / (wrap_table(t_tau) + ggtitle("Kendall's tau"))) +
+        plot_layout(ncol = 1, heights = c(3, 1)) +
         plot_annotation(title = glue("{station_code} | Normalized Values"))
     })
   )
@@ -1471,7 +1270,6 @@ p_pdf_r <- pred %>%
   ungroup() %>%
   nest_by(station_code, .keep = TRUE) %>%
   left_join(pred_tau_gt, by = "station_code") %>%
-  left_join(pred_img, by = "station_code") %>%
   mutate(
     p_ts = list({
       data %>%
@@ -1525,22 +1323,11 @@ p_pdf_r <- pred %>%
         )
     }),
     p = list({
-      p1 <- wrap_plots(
-        p_ts,
-        p_splot,
-        ncol = 2,
-        widths = c(4, 1),
-        guides = "collect",
-        axes = "collect"
-      )
-      p2 <- wrap_plots(
-        p_img,
-        wrap_table(t_tau) + ggtitle("Kendall's tau"),
-        ncol = 2,
-        widths = c(1, 1)
-      )
-      wrap_plots(p1, p2, ncol = 1, heights = c(3, 1)) +
-        plot_annotation(title = glue("{station_code} | Rank Percentiles"))
+      p <- (p_ts | p_splot) +
+        plot_layout(ncol = 2, widths = c(4, 1), guides = "collect")
+      (p / (wrap_table(t_tau) + ggtitle("Kendall's tau"))) +
+        plot_layout(ncol = 1, heights = c(3, 1)) +
+        plot_annotation(title = glue("{station_code} | Rankings"))
     })
   )
 p_pdf_r$p[[1]]

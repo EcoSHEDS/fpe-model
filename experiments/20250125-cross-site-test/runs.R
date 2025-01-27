@@ -1,4 +1,4 @@
-setwd("~/git/fpe-model/experiments/20250122-ranknet-aux/")
+setwd("~/git/fpe-model/experiments/20250125-cross-site-test/")
 
 library(tidyverse)
 library(jsonlite)
@@ -11,8 +11,158 @@ library(yaml)
 library(patchwork)
 library(gt)
 
-experiment <- "20250122-ranknet-aux"
+experiment <- "20250125-cross-site-test"
 daytime_hours <- 8:16
+
+# create combined images.csv table for all sites
+# create each run using the trained model for one site to predict all other sites
+# adapt python code to load from checkpoint and only do predictions
+
+
+# images ------------------------------------------------------------------
+
+src_dir <- "../20250122-ranknet-aux/"
+station_ids <- as.integer(basename(list.dirs(file.path(src_dir, "runs", "none"), recursive = FALSE)))
+
+images <- tibble(
+  station_id = station_ids
+) %>%
+  rowwise() %>%
+  mutate(
+    data = list({
+      read_csv(file.path(src_dir, "runs", "none", station_id, "input", "images.csv"), show_col_types = FALSE)
+    })
+  ) %>%
+  select(-station_id) %>%
+  unnest(data) %>%
+  mutate(
+    station_code = glue("{station_id}-{station_name}")
+  )
+images
+
+
+# runs --------------------------------------------------------------------
+
+dir.create("runs")
+
+for (station_id in station_ids) {
+  inp_dir <- file.path("runs", station_id, "input")
+  dir.create(inp_dir, showWarnings = FALSE, recursive = TRUE)
+
+  file.copy(
+    file.path(src_dir, "runs", "none", station_id, "output", "model", "model.pth"),
+    file.path(inp_dir, "model.pth")
+  )
+  images %>%
+    write_csv(file.path(inp_dir, "images.csv"))
+
+  list(
+    mlflow_experiment_name = experiment,
+    mlflow_run_name = glue("site_{station_id}"),
+    random_seed = 1210L,
+    pretrained_model = "model.pth",
+    skip_training = TRUE
+  ) %>%
+    write_yaml(file.path(inp_dir, "config.yml"))
+}
+
+
+# results -----------------------------------------------------------------
+
+pred <- tibble(
+  model = "none",
+  station_id = 29
+  # station_id = station_ids
+) %>%
+  rowwise() %>%
+  mutate(
+    data = list({
+      f <- file.path("runs", station_id, "output", "data", "predictions.csv")
+      if (!file.exists(f)) {
+        tibble()
+      } else {
+        read_csv(f, show_col_types = FALSE)
+      }
+    })
+  ) %>%
+  select(-station_id)
+
+pred_tau <- pred %>%
+  unnest(data) %>%
+  bind_rows(
+    pred %>%
+      unnest(data) %>%
+      mutate(split = "all")
+  ) %>%
+  mutate(split = factor(split, levels = c("train", "val", "test-in", "test-out", "all"))) %>%
+  group_by(model, station_code, split) %>%
+  summarise(
+    tau = cor(value, prediction, method = "kendall"),
+    rmse = sqrt(mean((scale(value) - scale(prediction)) ^ 2)),
+    .groups = "drop"
+  ) %>%
+  ungroup()
+
+p <- pred_tau %>%
+  ggplot(aes(split, fct_rev(station_code))) +
+  geom_tile(aes(fill = tau)) +
+  geom_text(aes(label = sprintf("%.2f", tau)), size = 3) +
+  scale_fill_distiller(palette = "YlGnBu", limits = c(0, 1), direction = 1) +
+  labs(x = "image split", y = "station") +
+  theme_bw() +
+  theme(
+    # aspect.ratio = 1,
+    axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1)
+  )
+ggsave("figs/tau-heat.png", plot = p, width = 6, height = 4)
+
+
+p_z_ts <- pred %>%
+  unnest(data) %>%
+  mutate(split = factor(split, levels = c("train", "val", "test-in", "test-out"))) %>%
+  group_by(model, station_code) %>%
+  mutate(across(c(value, prediction), scale)) %>%
+  ungroup() %>%
+  ggplot(aes(timestamp)) +
+  geom_line(aes(y = value, linetype = "obs. flow")) +
+  geom_point(aes(y = prediction, color = split), size = 0.5, alpha = 0.5) +
+  scale_color_brewer(palette = "Set1") +
+  facet_wrap(vars(station_code), scales = "free") +
+  guides(
+    linetype = guide_legend(order = 2),
+    color = guide_legend(order = 1)
+  ) +
+  labs(
+    x = "timestamp", y = "z(pred. score)",
+    color = "image\nsplit", linetype = NULL
+  ) +
+  theme_bw()
+p_z_ts
+ggsave("figs/ts-z.png", plot = p_z_ts, width = 14, height = 8)
+
+p_z_splot <- pred %>%
+  unnest(data) %>%
+  mutate(split = factor(split, levels = c("train", "val", "test-in", "test-out"))) %>%
+  group_by(model, station_code) %>%
+  mutate(across(c(value, prediction), scale)) %>%
+  ungroup() %>%
+  ggplot(aes(value, prediction)) +
+  geom_abline() +
+  geom_point(aes(color = split), size = 0.5, alpha = 0.5) +
+  geom_blank(aes(prediction, value)) +
+  scale_color_brewer(palette = "Set1") +
+  facet_wrap(vars(station_code), scales = "free", labeller = labeller(station_code = label_wrap_gen())) +
+  labs(
+    x = "z(obs. flow)", y = "z(pred. score)",
+    color = "image\nsplit"
+  ) +
+  theme_bw() +
+  theme(
+    strip.text = element_text(size = 8),
+    aspect.ratio = 1
+  )
+p_z_splot
+ggsave("figs/splot-z.png", plot = p_z_splot, width = 10, height = 8)
 
 # stations ----------------------------------------------------------------
 
@@ -1355,48 +1505,10 @@ pred_tau_gt <- pred_tau %>%
   ungroup() %>%
   select(-data)
 
-
-create_image_grob <- function(image_path, resize_width = 800, ...) {
-  img <- load.image(image_path)
-  img <- resize(img, resize_width, resize_width * height(img) / width(img))
-  grid::rasterGrob(img, interpolate = TRUE, ...)
-}
-
-pred_img <- pred %>%
-  left_join(
-    stations %>%
-      transmute(
-        station_code,
-        timezone = station$timezone
-      ),
-    by = "station_code"
-  ) %>%
-  filter(model == "direct") %>%
-  mutate(
-    p_img = list({
-      f <- data %>%
-        filter(
-          hour(with_tz(timestamp, tz = timezone)) == 12,
-          file.exists(file.path("~/data/fpe/images", filename))
-        ) %>%
-        slice_sample(n = 1) %>%
-        pull(filename)
-      create_image_grob(
-        file.path("~/data/fpe/images", f),
-        resize_width = 400,
-        just = c("center", "top"),
-        y = unit(1, "npc")
-      )
-    })
-  ) %>%
-  ungroup() %>%
-  select(station_code, p_img)
-
 p_pdf_z <- pred %>%
   ungroup() %>%
   nest_by(station_code, .keep = TRUE) %>%
   left_join(pred_tau_gt, by = "station_code") %>%
-  left_join(pred_img, by = "station_code") %>%
   mutate(
     p_ts = list({
       data %>%
@@ -1447,21 +1559,10 @@ p_pdf_z <- pred %>%
         )
     }),
     p = list({
-      p1 <- wrap_plots(
-        p_ts,
-        p_splot,
-        ncol = 2,
-        widths = c(4, 1),
-        guides = "collect",
-        axes = "collect"
-      )
-      p2 <- wrap_plots(
-        p_img,
-        wrap_table(t_tau) + ggtitle("Kendall's tau"),
-        ncol = 2,
-        widths = c(1, 1)
-      )
-      wrap_plots(p1, p2, ncol = 1, heights = c(3, 1)) +
+      p <- (p_ts | p_splot) +
+        plot_layout(ncol = 2, widths = c(4, 1), guides = "collect")
+      (p / (wrap_table(t_tau) + ggtitle("Kendall's tau"))) +
+        plot_layout(ncol = 1, heights = c(3, 1)) +
         plot_annotation(title = glue("{station_code} | Normalized Values"))
     })
   )
@@ -1471,7 +1572,6 @@ p_pdf_r <- pred %>%
   ungroup() %>%
   nest_by(station_code, .keep = TRUE) %>%
   left_join(pred_tau_gt, by = "station_code") %>%
-  left_join(pred_img, by = "station_code") %>%
   mutate(
     p_ts = list({
       data %>%
@@ -1525,22 +1625,11 @@ p_pdf_r <- pred %>%
         )
     }),
     p = list({
-      p1 <- wrap_plots(
-        p_ts,
-        p_splot,
-        ncol = 2,
-        widths = c(4, 1),
-        guides = "collect",
-        axes = "collect"
-      )
-      p2 <- wrap_plots(
-        p_img,
-        wrap_table(t_tau) + ggtitle("Kendall's tau"),
-        ncol = 2,
-        widths = c(1, 1)
-      )
-      wrap_plots(p1, p2, ncol = 1, heights = c(3, 1)) +
-        plot_annotation(title = glue("{station_code} | Rank Percentiles"))
+      p <- (p_ts | p_splot) +
+        plot_layout(ncol = 2, widths = c(4, 1), guides = "collect")
+      (p / (wrap_table(t_tau) + ggtitle("Kendall's tau"))) +
+        plot_layout(ncol = 1, heights = c(3, 1)) +
+        plot_annotation(title = glue("{station_code} | Rankings"))
     })
   )
 p_pdf_r$p[[1]]

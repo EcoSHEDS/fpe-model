@@ -7,6 +7,8 @@ library(glue)
 library(daymetr)
 library(openmeteo)
 library(yaml)
+library(patchwork)
+library(gt)
 
 experiment <- "20250123-aux"
 daytime_hours <- 8:16
@@ -780,7 +782,6 @@ stations_anno <- stations %>%
     })
   )
 
-library(patchwork)
 wrap_plots(stations_anno$plot_flip)
 wrap_plots(stations_anno$plot_same)
 
@@ -1188,6 +1189,14 @@ pred <- runs %>%
     model = factor(model, levels = c("mlp", "lstm-day", "lstm-hr"))
   )
 
+list(
+  stations_inp = stations_inp,
+  pred = pred
+) %>%
+  write_rds("cache/runs.rds")
+
+pred <- read_rds("cache/runs.rds")$pred
+
 pred %>%
   tabyl(model, type)
 
@@ -1286,6 +1295,34 @@ p <- pred_tau %>%
   labs(x = "station") +
   theme_bw()
 ggsave("figs/tau-dot.png", width = 10, height = 12)
+
+p <- pred_tau %>%
+  ggplot(aes(split, fct_rev(station_code))) +
+  geom_tile(aes(fill = tau)) +
+  geom_text(aes(label = sprintf("%.2f", tau)), size = 2) +
+  scale_fill_distiller(palette = "YlGnBu", limits = c(0, 1), direction = 1) +
+  facet_grid(vars(model), vars(type_pairs_n), labeller = labeller(station_code = label_wrap_gen())) +
+  labs(x = "image split", y = "station") +
+  theme_bw() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1)
+  )
+ggsave("figs/tau-heat-model.png", plot = p, width = 14, height = 8)
+
+p <- pred_tau %>%
+  filter(split == "all") %>%
+  ggplot(aes(model, type_pairs_n)) +
+  geom_tile(aes(fill = tau)) +
+  geom_text(aes(label = sprintf("%.2f", tau)), size = 2) +
+  scale_fill_distiller(palette = "YlGnBu", limits = c(0, 1), direction = 1) +
+  facet_wrap(vars(station_code), labeller = labeller(station_code = label_wrap_gen())) +
+  labs(x = "model", y = "training type (dataset size)", fill = "tau(all)") +
+  theme_bw() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1),
+    strip.text = element_text(size = 6),
+  )
+ggsave("figs/tau-heat-station.png", plot = p, width = 10, height = 8)
 
 # tau: box plot by n, type | color=split
 pred_tau %>%

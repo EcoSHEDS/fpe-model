@@ -4,4 +4,5 @@
 */cache
 *.rds
 *.png
+*.pdf
 ._*

@@ -7,6 +7,7 @@ import time
 from pathlib import Path
 from typing import Dict, Tuple, Any, Optional
 import yaml
+import mlflow
 
 import numpy as np
 import pandas as pd
@@ -33,6 +34,37 @@ logging.basicConfig(
     datefmt='%Y-%m-%d %H:%M:%S'
 )
 logger = logging.getLogger(__name__)
+
+
+def setup_mlflow(experiment_name: Optional[str] = None, run_name: Optional[str] = None, tracking_uri: Optional[str] = None) -> bool:
+    """Setup MLflow tracking if available.
+    
+    Args:
+        experiment_name: Name of the MLflow experiment
+        run_name: Name of the MLflow run
+        tracking_uri: URI of the MLflow tracking server
+        
+    Returns:
+        bool: Whether MLflow tracking is enabled
+    """
+    try:
+        import mlflow
+        
+        if tracking_uri:
+            mlflow.set_tracking_uri(tracking_uri)
+            logger.info("MLflow tracking URI set to: %s", tracking_uri)
+        
+        if experiment_name and run_name:
+            mlflow.set_experiment(experiment_name)
+            logger.info("MLflow experiment set to: %s", experiment_name)
+            mlflow.start_run(run_name=run_name)
+            logger.info("MLflow run set to: %s", run_name)
+            return True
+            
+        return False
+    except ImportError:
+        logger.info("MLflow not available - training metrics will not be logged")
+        return False
 
 class MetricLogger(object):
     """Computes and tracks the average and current value of a metric.
@@ -477,6 +509,25 @@ def train(args: argparse.Namespace) -> None:
         set_seed(args.seed)
         logger.info("Deterministic mode enabled with seed: %d", args.seed)
     
+    # Setup MLflow if requested
+    use_mlflow = setup_mlflow(
+        experiment_name=args.mlflow_experiment_name,
+        run_name=args.mlflow_run_name,
+        tracking_uri=args.mlflow_tracking_uri
+    )
+    if use_mlflow:
+        # Log parameters
+        mlflow.log_params(args.__dict__)
+        mlflow_params_path = Path(args.data_dir) / "mlflow-params.yaml"
+        logger.info("MLflow params path: %s", mlflow_params_path)
+        if mlflow_params_path.exists():
+            logger.info("Loading additional MLflow params from %s", mlflow_params_path)
+            with open(mlflow_params_path) as f:
+                mlflow_params = yaml.safe_load(f)
+                mlflow.log_params(mlflow_params)
+        else:
+            logger.info("No MLflow params file found at %s", mlflow_params_path)
+    
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     logger.info("Using device: %s", device)
     if torch.cuda.is_available():
@@ -675,6 +726,16 @@ def train(args: argparse.Namespace) -> None:
 
             pd.DataFrame(metrics).to_csv(output_data_dir / "metrics.csv", index=False)
 
+            # MLflow logging
+            if use_mlflow:
+                mlflow.log_metrics({
+                    "train_loss": train_loss,
+                    "val_loss": val_loss,
+                    "learning_rate": new_lr,
+                    "epoch_time": epoch_time,
+                }, step=epoch)
+
+
             # Backbone unfreezing
             if (epoch + 1) == args.unfreeze_after:
                 logger.info("Unfreezing CNN backbone at epoch %d", epoch + 1)
@@ -691,6 +752,20 @@ def train(args: argparse.Namespace) -> None:
         logger.info("Average epoch time: %s", 
                     format_time(sum(epoch_times) / len(epoch_times)))
         logger.info("Best epoch: %d", best_epoch)
+
+        if use_mlflow:
+            mlflow.log_metrics({
+                "total_train_time": total_train_time,
+                "total_epochs": final_epoch,
+                "train_n_pairs": len(train_df),
+                "val_n_pairs": len(val_df),
+                "best_epoch": best_epoch,
+                "best_train_loss": float(f"{metrics['train_loss'][best_epoch]:.4f}"),
+                "best_train_improvement": float(f"{metrics['train_loss'][0] - metrics['train_loss'][best_epoch]:.4f}"),
+                "best_val_loss": float(f"{min_val_loss:.4f}"),
+                "best_val_improvement": float(f"{metrics['val_loss'][0] - min_val_loss:.4f}")
+            })
+
         logger.info("Training completed")
     else:
         logger.info("Skipping training phase")
@@ -854,6 +929,22 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--seed", type=int, default=1691,
         help="random seed for reproducibility"
+    )
+
+
+
+    # MLflow parameters
+    parser.add_argument(
+        "--mlflow-tracking-uri", type=str, default="http://localhost:5000",
+        help="MLflow tracking URI. If not provided, MLflow logging will be disabled."
+    )
+    parser.add_argument(
+        "--mlflow-experiment-name", type=str, default=None,
+        help="MLflow experiment name. If not provided, MLflow logging will be disabled."
+    )
+    parser.add_argument(
+        "--mlflow-run-name", type=str, default=None,
+        help="MLflow run name. If not provided, MLflow logging will be disabled."
     )
 
     args = parser.parse_args()
