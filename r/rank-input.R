@@ -142,11 +142,11 @@ log_info("annotations_dates: {str_c(annotations_dates, collapse=', ')}")
 
 # setup -------------------------------------------------------------------
 
-dataset_dir <- file.path(output_dir, station_id, "datasets", dataset_code)
+dataset_dir <- file.path(output_dir, "datasets", dataset_code)
 log_info("dataset_dir: {dataset_dir}")
 stopifnot(dir.exists(dataset_dir))
 
-model_dir <- file.path(output_dir, station_id, "models", model_code)
+model_dir <- file.path(output_dir,  "models", model_code)
 if (dir.exists(model_dir)) {
   if (overwrite) {
     log_warn("model_dir: {model_dir} (exists, overwriting)")
@@ -584,7 +584,7 @@ manifest <- pairs %>%
 
 manifest_json <- str_replace(
   toJSON(manifest, auto_unbox = TRUE),
-  "\\[", "[{\"prefix\": \"s3://usgs-chs-conte-prod-fpe-storage/\"},"
+  "\\[", "[{\"prefix\": \"s3://usgstest-jmfpe-dev-storage/\"},"
 )
 write_file(manifest_json, file.path(input_dir, "manifest.json"))
 

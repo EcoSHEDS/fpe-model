@@ -71,7 +71,7 @@ log_info("output_dir: {output_dir}")
 # dir.create(output_dir, showWarnings = FALSE, recursive = TRUE)
 stopifnot(dir.exists(output_dir))
 
-dataset_dir <- file.path(output_dir, station_id, "datasets", dataset_code)
+dataset_dir <- file.path(output_dir, "datasets", dataset_code)
 if (!dir.exists(dataset_dir)) {
   log_info("dataset_dir: {dataset_dir} (created)")
   dir.create(dataset_dir, showWarnings = FALSE, recursive = TRUE)

@@ -1,0 +1,13 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: CloudFormation template for creating a SageMaker Pipeline
+
+Resources:
+  SageMakerPipeline:
+    Type: AWS::SageMaker::Pipeline
+    Properties:
+      PipelineName: MySageMakerPipeline
+      RoleArn: arn:aws:iam::629235421780:role/SageMakerExecutionRole
+      PipelineDefinition:
+        PipelineDefinitionS3Location:
+          Bucket: "sagemaker-629235421780-us-east-2"
+          Key: "pipeline-definition.json"
