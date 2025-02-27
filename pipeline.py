@@ -210,18 +210,26 @@ model = PyTorchModel(
     framework_version="1.13.1",
 )
 
-step_create_model = ModelStep(
-    name="CreatingModel",
-    step_args=model.create(instance_type="ml.m5.large")
-)
+# step_create_model = ModelStep(
+#     name="CreatingModel",
+#     step_args=model.create(instance_type="ml.m5.large")
+# )
 
-transformer = Transformer(
-    model_name=step_create_model.properties.ModelName,
-    instance_type="ml.c5.xlarge",
+# transformer = Transformer(
+#     model_name=step_create_model.properties.ModelName,
+#     instance_type="ml.c5.xlarge",
+#     instance_count=1,
+#     output_path=Join(on='/', values= [create_model_training_dataset_step.properties.ProcessingOutputConfig.Outputs['dataset'].S3Output.S3Uri, 'transform']),
+#     sagemaker_session=pipeline_session,
+# )
+transformer = model.transformer(
     instance_count=1,
-    output_path=Join(on='/', values= [create_model_training_dataset_step.properties.ProcessingOutputConfig.Outputs['dataset'].S3Output.S3Uri, 'transform']),
-    sagemaker_session=pipeline_session,
-)
+    instance_type="ml.c5.xlarge",
+    output_path=Join(on='/', values=[
+        create_model_training_dataset_step.properties.ProcessingOutputConfig.Outputs['dataset'].S3Output.S3Uri,
+        'transform'
+    ]),
+    sagemaker_session=pipeline_session)
 
 step_transform = TransformStep(
     name="RuningInference",
@@ -258,7 +266,7 @@ pipeline = Pipeline(
         param_n_epoch,
         param_learning_rate
     ],
-    steps = [step_station_images_annotations, create_model_training_dataset_step, training_step, step_create_model, step_transform ],
+    steps = [step_station_images_annotations, create_model_training_dataset_step, training_step, step_transform ],
     sagemaker_session=pipeline_session,
 )
 
