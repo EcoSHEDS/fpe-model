@@ -45,6 +45,10 @@ NETWORK_CONFIG = NetworkConfig(
     security_group_ids=["sg-044c8a541b32a89b6"],
     subnets=["subnet-0fe130a3b16016bf2"],
 )
+
+region = boto3.Session().region_name
+sagemaker_session = sagemaker.session.Session()
+
 pipeline_session = PipelineSession()
 pipeline_name = f"USGSPipeline"
 
@@ -210,26 +214,23 @@ model = PyTorchModel(
     framework_version="1.13.1",
 )
 
-# step_create_model = ModelStep(
-#     name="CreatingModel",
-#     step_args=model.create(instance_type="ml.m5.large")
-# )
+registration_args = model.register(
+    transform_instances=["ml.c5.xlarge"],
+    inference_instances=["ml.m5.large"]
+)
 
-# transformer = Transformer(
-#     model_name=step_create_model.properties.ModelName,
-#     instance_type="ml.c5.xlarge",
-#     instance_count=1,
-#     output_path=Join(on='/', values= [create_model_training_dataset_step.properties.ProcessingOutputConfig.Outputs['dataset'].S3Output.S3Uri, 'transform']),
-#     sagemaker_session=pipeline_session,
-# )
-transformer = model.transformer(
-    instance_count=1,
-    instance_type="ml.c5.xlarge",
-    output_path=Join(on='/', values=[
-        create_model_training_dataset_step.properties.ProcessingOutputConfig.Outputs['dataset'].S3Output.S3Uri,
-        'transform'
-    ]),
-    sagemaker_session=pipeline_session)
+step_create_model = ModelStep(
+ name="CreatingModel",
+ step_args=model.create()
+)
+
+transformer = Transformer(
+     model_name=step_create_model.properties.ModelName,
+     instance_type="ml.c5.xlarge",
+     instance_count=1,
+     output_path=Join(on='/', values= [create_model_training_dataset_step.properties.ProcessingOutputConfig.Outputs['dataset'].S3Output.S3Uri, 'transform']),
+     sagemaker_session=pipeline_session,
+)
 
 step_transform = TransformStep(
     name="RuningInference",
@@ -239,6 +240,25 @@ step_transform = TransformStep(
         data_type="ManifestFile", content_type="image/jpg"
     )
 )
+
+
+
+'''transformer = model.transformer(
+    instance_count=1,
+    instance_type="ml.c5.xlarge",
+    output_path=Join(on='/', values=[
+        create_model_training_dataset_step.properties.ProcessingOutputConfig.Outputs['dataset'].S3Output.S3Uri,
+        'transform'
+    ]))
+
+step_transform = TransformStep(
+    name="RuningInference",
+    transformer=transformer,
+    inputs=TransformInput(
+        data=Join(on='/', values= [create_model_training_dataset_step.properties.ProcessingOutputConfig.Outputs['dataset'].S3Output.S3Uri, 'manifest.json']),
+        data_type="ManifestFile", content_type="image/jpg"
+    )
+)'''
 
 # Step 5: Run Transform Merge
 
@@ -266,7 +286,7 @@ pipeline = Pipeline(
         param_n_epoch,
         param_learning_rate
     ],
-    steps = [step_station_images_annotations, create_model_training_dataset_step, training_step, step_transform ],
+    steps = [step_station_images_annotations, create_model_training_dataset_step, training_step, step_create_model, step_transform ],
     sagemaker_session=pipeline_session,
 )
 
