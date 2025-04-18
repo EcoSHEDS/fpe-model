@@ -3,6 +3,7 @@ import boto3
 import time
 import json
 import os
+from datetime import datetime
 import pandas as pd
 import sagemaker
 from sagemaker.pytorch.model import PyTorchModel
@@ -97,7 +98,8 @@ def run_transform (station_id, model_code, directory):
     transformer = pytorch_model.transformer(
         instance_count=1,
         instance_type="ml.c5.xlarge",
-        output_path=s3_transform_path
+        output_path=s3_transform_path,
+        max_payload=20
     )
 
     print(f"starting transform job: {job_name}")
@@ -105,7 +107,7 @@ def run_transform (station_id, model_code, directory):
         data=f"{s3_transform_path}/manifest.json",
         data_type="ManifestFile",
         content_type="image/jpg",
-        job_name=job_name,
+        job_name=f"fpe-rank-transform-{station_id}-{datetime.now().strftime('%Y%m%d-%H%M%S')}",
         wait=False,
     )
 
