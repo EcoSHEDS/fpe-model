@@ -1046,6 +1046,66 @@ stn_06 %>%
   theme(aspect.ratio = 1)
 
 
+# run 03 lr001 --------------------------------------------------------------
+
+# compare run-03 vs run-03-lr001
+
+pred_03_lr001 <- tibble(
+  station_id = c(12, 16, 18, 46, 166)
+) %>%
+  rowwise() %>%
+  mutate(
+    data = list({
+      f <- file.path(exp_dir, "runs", "run-03-lr001", glue("station-{station_id}"), "output", "data", "predictions.csv")
+      if (!file.exists(f)) {
+        tibble()
+      } else {
+        read_csv(f, show_col_types = FALSE) %>%
+          mutate(
+            across(c(name, station_name), as.character)
+          )
+      }
+    }),
+    tau = {
+      if (nrow(data) > 0) {
+        cor(data$value, data$prediction, method = "kendall")
+      } else {
+        NA_real_
+      }
+    }
+  )
+
+pred_03_lr01 <- tibble(
+  station_id = c(12, 16, 18, 46, 166)
+) %>%
+  rowwise() %>%
+  mutate(
+    data = list({
+      f <- file.path(exp_dir, "runs", "run-03", glue("station-{station_id}"), "output", "data", "predictions.csv")
+      if (!file.exists(f)) {
+        tibble()
+      } else {
+        read_csv(f, show_col_types = FALSE) %>%
+          mutate(
+            across(c(name, station_name), as.character)
+          )
+      }
+    }),
+    tau = {
+      if (nrow(data) > 0) {
+        cor(data$value, data$prediction, method = "kendall")
+      } else {
+        NA_real_
+      }
+    }
+  )
+
+pred_03_lr <- bind_rows(
+  `0.001` = pred_03_lr001,
+  `0.01` = pred_03_lr01,
+  .id = "lr"
+)
+
 # predictions -----------------------------------------------------------------
 
 pred_runs <- bind_rows(
