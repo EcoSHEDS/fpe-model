@@ -52,6 +52,11 @@ def run_transform_predictions (station_id, model_code, directory, job_size = 500
     print(f"downloading: s3://{model_bucket}/{output_key} -> {output_file}")
     s3.download_file(Bucket=model_bucket, Key=output_key, Filename=output_file)
 
+    model_file = f"{output_dir}/model.tar.gz"
+    model_key = f"{jobs_key}/{job_name}/output/model.tar.gz"
+    print(f"downloading: s3://{model_bucket}/{model_key} -> {model_file}")
+    s3.download_file(Bucket=model_bucket, Key=model_key, Filename=model_file)
+
     print(f"extracting: {output_file}")
     subprocess.run(["tar", "-xzvf", output_file, "-C", output_dir])
 
