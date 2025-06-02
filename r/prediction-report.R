@@ -1,6 +1,6 @@
 library(tidyverse)
 
-generate_report <- function (station_id, model_code, directory = "/mnt/d/fpe/rank") {
+generate_report <- function (station_id, model_code, directory = "/mnt/d/fpe/rank/") {
   cat("generating report:", station_id, "\n")
 
   quarto::quarto_render(
@@ -21,10 +21,10 @@ generate_report <- function (station_id, model_code, directory = "/mnt/d/fpe/ran
   print(paste0("Report saved: ", target_filename))
 }
 
-generate_report(257, "RANK-FLOW-20241213")
+generate_report(41, "RANK-FLOW-20250326", directory = "/mnt/d/fpe/rank/20250326/")
 
-station_ids <- read_csv("/mnt/d/fpe/rank/stations-20241212.txt", col_names = "station_id")$station_id
-walk(station_ids, \(x) generate_report(x, "RANK-FLOW-20241212"))
+station_ids <- read_csv("/mnt/d/fpe/rank/20250521/stations.txt", col_names = "station_id")$station_id
+walk(station_ids, \(x) generate_report(x, "RANK-CHLA-20250521", directory = "/mnt/d/fpe/rank/20250521/"))
 
 # all runs in csv file
 runs <- read_csv("/mnt/d/fpe/rank/model-runs.csv")
