@@ -318,8 +318,10 @@ annotations_raw <- annotations_db %>%
         fromJSON(simplifyVector = TRUE, flatten = TRUE) %>%
         as_tibble() %>%
         mutate(pair_id = row_number())
-    }, .progress = TRUE)
-  )
+    }, .progress = TRUE),
+    data_nrow = map_int(data, nrow)
+  ) %>%
+  filter(data_nrow > 0)
 
 annotations <- annotations_raw %>%
   rowwise() %>%
