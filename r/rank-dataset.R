@@ -46,6 +46,7 @@ if (interactive()) {
     "--directory=/mnt/d/fpe/rank",
     "--station-id=81",
     "--variable-id=FLOW_CFS",
+    "--annotation-variable=FLOW",
     "--overwrite",
     "RANK-FLOW-20240613"
   )
@@ -63,6 +64,7 @@ args <- parse_args(
 dataset_code <- args$args[1]
 station_id <- args$options$station_id
 variable_id <- args$options$variable_id
+annotation_variable <- args$options$annotation_variable
 output_dir <- args$options$directory
 overwrite <- args$options$overwrite
 MAXGAP <- args$options$maxgap
