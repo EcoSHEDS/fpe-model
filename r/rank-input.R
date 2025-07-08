@@ -31,6 +31,10 @@ parser <- add_option(
   default="FLOW_CFS", help="Variable ID from database (default='FLOW_CFS')"
 )
 parser <- add_option(
+  parser, c("-a", "--annotation-variable"), type="character",
+  default="FLOW", help="Anntation variable from database (default='FLOW')"
+)
+parser <- add_option(
   parser, c("-D", "--dataset-code"), type="character",
   help=glue("Dataset code")
 )
@@ -110,6 +114,7 @@ model_code <- args$args[1]
 output_dir <- args$options$directory
 station_id <- args$options$station_id
 variable_id <- args$options$variable_id
+annotation_variable <- args$options$annotation_variable
 dataset_code <- args$options$dataset_code
 train_frac <- args$options$train_frac
 seed <- args$seed
@@ -126,6 +131,7 @@ stopifnot(dir.exists(output_dir))
 log_info("output_dir: {output_dir}")
 log_info("station_id: {station_id}")
 log_info("variable_id: {variable_id}")
+log_info("annotation_variable: {annotation_variable}")
 log_info("dataset_code: {dataset_code}")
 log_info("model_code: {model_code}")
 log_info("train_frac: {train_frac}")
@@ -594,6 +600,7 @@ list(
   model_code = model_code,
   dataset_code = dataset_code,
   variable_id = variable_id,
+  annotation_variable = annotation_variable,
   station = list(
     id = station$id,
     name = station$name

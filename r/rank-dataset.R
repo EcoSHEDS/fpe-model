@@ -29,6 +29,10 @@ parser <- add_option(
   default="FLOW_CFS", help="Variable ID from database (default='FLOW_CFS')"
 )
 parser <- add_option(
+  parser, c("-a", "--annotation-variable"), type="character",
+  default="FLOW", help="Anntation variable from database (default='FLOW')"
+)
+parser <- add_option(
   parser, c("-m", "--maxgap"), type="integer", default=65,
   help="Maximum gap duration (minutes) for value interpolation (default=65)"
 )
@@ -295,13 +299,14 @@ log_info("fetching: annotations from db")
 annotations_db <- tbl(con, "annotations") %>%
   filter(
     !flag,
-    station_id == local(station_id)
+    station_id == local(station_id),
+    variable == local(annotation_variable)
   ) %>%
   left_join(
     select(tbl(con, "stations"), station_id = id, station_name = name),
     by = "station_id"
   ) %>%
-  select(annotation_id = id, user_id, station_id, station_name, duration_sec, n, url) %>%
+  select(annotation_id = id, user_id, station_id, station_name, duration_sec, n, url, variable) %>%
   collect()
 
 log_info("fetching: annotations from s3")
@@ -382,7 +387,7 @@ if (nrow(annotations) > 0) {
     scale_x_datetime(date_breaks = "2 months", date_labels = "%b %Y") +
     scale_y_datetime(date_breaks = "2 months", date_labels = "%b %Y") +
     labs(
-      title = glue("{station$name[[1]]} (ID={station_id}) | {variable_id}")
+      title = glue("{station$name[[1]]} (ID={station_id}) | {variable_id} | {annotation_variable}")
     ) +
     theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5))
   log_info("saving: {file.path(dataset_dir, 'annotations-splot.png')}")
@@ -396,7 +401,7 @@ if (nrow(annotations) > 0) {
     scale_x_datetime(date_breaks = "2 months", date_labels = "%b %Y") +
     labs(
       y = "cumul. # annotated images",
-      title = glue("{station$name[[1]]} (ID={station_id}) | {variable_id}")
+      title = glue("{station$name[[1]]} (ID={station_id}) | {variable_id} | {annotation_variable}")
     ) +
     theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5))
   log_info("saving: {file.path(dataset_dir, 'annotations-cumul.png')}")
@@ -454,6 +459,7 @@ list(
   dataset_code = dataset_code,
   station_id = station_id,
   variable_id = variable_id,
+  annotation_variable = annotation_variable,
   images = out_images,
   values = out_values,
   annotations = out_annotations,
