@@ -74,7 +74,7 @@ def run_train (station_id, model_code, directory):
         framework_version="1.13.1",
         role="arn:aws:iam::694155575325:role/fpe-prod-sagemaker-execution-role",
         instance_count=1,
-        instance_type="ml.p3.2xlarge",
+        instance_type="ml.g6.2xlarge",
         volume_size=100,
         hyperparameters={
             "epochs": 20
