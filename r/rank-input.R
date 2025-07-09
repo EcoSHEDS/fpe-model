@@ -82,6 +82,10 @@ parser <- add_option(
   parser, "--annotations-end", type="character", default=default_end,
   help=glue("Maximum date (ISO Format, YYYY-MM-DD) for annotation pairs (default='{default_end}')")
 )
+parser <- add_option(
+  parser, "--annotations-max-n", type="integer", default=NULL,
+  help=glue("Maximum number of annotation pairs (default=NULL, no limit)")
+)
 
 parser <- add_option(
   parser, c("-o", "--overwrite"), action="store_true",
@@ -122,6 +126,7 @@ images_hours <- c(args$options$min_hour, args$options$max_hour)
 images_months <- c(args$options$min_month, args$options$max_month)
 images_dates <- ymd(c(args$options$images_start, args$options$images_end))
 annotations_dates <- ymd(c(args$options$annotations_start, args$options$annotations_end))
+annotations_max_n <- args$options$annotations_max_n
 overwrite <- args$options$overwrite
 
 stopifnot(dir.exists(output_dir))
@@ -145,6 +150,7 @@ log_info("images_hours: {str_c(images_hours, collapse=', ')}")
 log_info("images_months: {str_c(images_months, collapse=', ')}")
 log_info("images_dates: {str_c(images_dates, collapse=', ')}")
 log_info("annotations_dates: {str_c(annotations_dates, collapse=', ')}")
+log_info("annotations_max_n: {annotations_max_n}")
 
 # setup -------------------------------------------------------------------
 
@@ -340,6 +346,15 @@ annotations <- annotations_total %>%
     as_date(right.timestamp) >= annotations_dates[1],
     as_date(right.timestamp) <= annotations_dates[2]
   )
+
+if (!is.null(annotations_max_n)) {
+  log_info("annotations: limiting to {scales::comma(annotations_max_n)} pairs")
+  annotations <- annotations %>%
+    slice_sample(n = annotations_max_n)
+} else {
+  annotations_max_n <- nrow(annotations)
+}
+
 log_info("annotations: n={scales::comma(nrow(annotations))} ({scales::percent(nrow(annotations)/nrow(annotations_total), accuracy = 1)} of {scales::comma(nrow(annotations_total))} total)")
 
 test_in_dates <- range(as_date(c(annotations$left.timestamp, annotations$right.timestamp)))

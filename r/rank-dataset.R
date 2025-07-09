@@ -29,10 +29,6 @@ parser <- add_option(
   default="FLOW_CFS", help="Variable ID from database (default='FLOW_CFS')"
 )
 parser <- add_option(
-  parser, c("-a", "--annotation-variable"), type="character",
-  default="FLOW", help="Anntation variable from database (default='FLOW')"
-)
-parser <- add_option(
   parser, c("-m", "--maxgap"), type="integer", default=65,
   help="Maximum gap duration (minutes) for value interpolation (default=65)"
 )
@@ -46,7 +42,6 @@ if (interactive()) {
     "--directory=/mnt/d/fpe/rank",
     "--station-id=81",
     "--variable-id=FLOW_CFS",
-    "--annotation-variable=FLOW",
     "--overwrite",
     "RANK-FLOW-20240613"
   )
@@ -64,7 +59,6 @@ args <- parse_args(
 dataset_code <- args$args[1]
 station_id <- args$options$station_id
 variable_id <- args$options$variable_id
-annotation_variable <- args$options$annotation_variable
 output_dir <- args$options$directory
 overwrite <- args$options$overwrite
 MAXGAP <- args$options$maxgap
@@ -297,6 +291,18 @@ if (nrow(values) > 0) {
 
 # annotations -------------------------------------------------------------
 
+annotation_variable <- switch(
+  variable_id,
+  FLOW_CFS = "FLOW",
+  STAGE_FT = "STAGE",
+  ICE = "ICE",
+  SNOW_FT = "SNOW",
+  CHLA_PPB = "ALGAE",
+  ANIMAL_COUNT = "ANIMALS",
+  OTHER = "OTHER",
+  stop(glue("Unknown variable_id: {variable_id}"))
+)
+
 log_info("fetching: annotations from db")
 annotations_db <- tbl(con, "annotations") %>%
   filter(
@@ -308,7 +314,7 @@ annotations_db <- tbl(con, "annotations") %>%
     select(tbl(con, "stations"), station_id = id, station_name = name),
     by = "station_id"
   ) %>%
-  select(annotation_id = id, user_id, station_id, station_name, duration_sec, n, url, variable) %>%
+  select(annotation_id = id, user_id, station_id, station_name, duration_sec, n, url) %>%
   collect()
 
 log_info("fetching: annotations from s3")
@@ -389,7 +395,7 @@ if (nrow(annotations) > 0) {
     scale_x_datetime(date_breaks = "2 months", date_labels = "%b %Y") +
     scale_y_datetime(date_breaks = "2 months", date_labels = "%b %Y") +
     labs(
-      title = glue("{station$name[[1]]} (ID={station_id}) | {variable_id} | {annotation_variable}")
+      title = glue("{station$name[[1]]} (ID={station_id}) | {variable_id}")
     ) +
     theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5))
   log_info("saving: {file.path(dataset_dir, 'annotations-splot.png')}")
@@ -403,7 +409,7 @@ if (nrow(annotations) > 0) {
     scale_x_datetime(date_breaks = "2 months", date_labels = "%b %Y") +
     labs(
       y = "cumul. # annotated images",
-      title = glue("{station$name[[1]]} (ID={station_id}) | {variable_id} | {annotation_variable}")
+      title = glue("{station$name[[1]]} (ID={station_id}) | {variable_id}")
     ) +
     theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5))
   log_info("saving: {file.path(dataset_dir, 'annotations-cumul.png')}")
@@ -461,7 +467,6 @@ list(
   dataset_code = dataset_code,
   station_id = station_id,
   variable_id = variable_id,
-  annotation_variable = annotation_variable,
   images = out_images,
   values = out_values,
   annotations = out_annotations,
