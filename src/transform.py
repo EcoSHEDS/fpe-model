@@ -44,10 +44,14 @@ def model_fn(model_dir):
     return model.to(device)
 
 def load_from_bytearray(request_body):
-    image_as_bytes = io.BytesIO(request_body)
-    image = Image.open(image_as_bytes)
-    image_tensor = ToTensor()(image)
-    return image_tensor
+    try:
+        image_as_bytes = io.BytesIO(request_body)
+        image = Image.open(image_as_bytes)
+        image_tensor = ToTensor()(image)
+        return image_tensor
+    except Exception as e:
+        print(f"Error loading image: {e}")
+        raise ValueError("Invalid image payload")
 
 
 def input_fn(request_body, request_content_type):
