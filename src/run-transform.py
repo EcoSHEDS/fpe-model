@@ -99,7 +99,11 @@ def run_transform (station_id, model_code, directory):
         instance_count=1,
         instance_type="ml.c5.xlarge",
         output_path=s3_transform_path,
-        max_payload=20
+        strategy="SingleRecord",
+        max_payload=20,
+        env={
+            "TS_MAX_REQUEST_SIZE": str(20 * 1024 * 1024),
+        }
     )
 
     print(f"starting transform job: {job_name}")
