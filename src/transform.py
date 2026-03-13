@@ -50,8 +50,8 @@ def load_from_bytearray(request_body):
         image_tensor = ToTensor()(image)
         return image_tensor
     except Exception as e:
-        print(f"Error loading image: {e}")
-        raise ValueError("Invalid image payload")
+        print(f"Error loading image (skipping): {e}")
+        return None
 
 
 def input_fn(request_body, request_content_type):
@@ -67,6 +67,8 @@ def input_fn(request_body, request_content_type):
 
 # Perform prediction on the deserialized object, with the loaded model
 def predict_fn(input_object, model):
+    if input_object is None:
+        return {"score": None}
     transformed_object = model.module.transforms['eval'](input_object)
     output = model.module.forward_single(transformed_object.unsqueeze(0))
     pred = output.detach().cpu().numpy()
