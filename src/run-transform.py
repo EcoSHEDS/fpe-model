@@ -87,8 +87,8 @@ def run_transform (station_id, model_code, directory):
     pytorch_model = PyTorchModel(
         model_data=model_path,
         role="arn:aws:iam::694155575325:role/fpe-prod-sagemaker-execution-role",
-        py_version="py38",
-        framework_version="1.12",
+        py_version="py39",
+        framework_version="1.13.1",
         source_dir="src/",
         entry_point="transform.py",
         sagemaker_session = sm_session
@@ -126,4 +126,3 @@ if __name__ == "__main__":
     print(args)
 
     run_transform(args.station_id, args.model_code, args.directory)
-
