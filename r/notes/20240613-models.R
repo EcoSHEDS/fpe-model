@@ -46,7 +46,7 @@ for (i in 1:nrow(stations)) {
 
 stations %>%
   write_csv(glue("{output_dir}/stations.csv"))
-base_dir <- "C:\Users\jdwalker\OneDrive - DOI\projects\fpe\Ranking Model\Model Results\2024-06-13 - USGS Stations"
+# base_dir <- "C:\Users\jdwalker\OneDrive - DOI\projects\fpe\Ranking Model\Model Results\2024-06-13 - USGS Stations"
 
 stations <- read_csv(file.path(base_dir, "stations.csv"))
 x <- stations %>%

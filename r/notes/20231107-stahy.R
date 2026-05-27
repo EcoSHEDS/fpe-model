@@ -63,7 +63,7 @@ splits <- pairs %>%
 
 pred <- read_csv(pred_file, show_col_types = FALSE) %>%
   mutate(
-    timestamp = with_tz(timestamp, tzone = "US/Eastern"),
+    timestamp = with_tz(timestamp, tzone = "America/New_York"),
     date = as_date(timestamp),
     hour = hour(timestamp),
     rank_obs = rank(flow_cfs, na.last = "keep") / n(),

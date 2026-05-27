@@ -1,6 +1,6 @@
 # set up model inputs for Westbrook stations
 
-Sys.setenv(TZ = "US/Eastern")
+Sys.setenv(TZ = "America/New_York")
 
 library(tidyverse)
 library(lubridate)

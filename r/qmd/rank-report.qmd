@@ -63,7 +63,7 @@ metrics <- read_csv(metrics_file, show_col_types = FALSE)
 annotations <- read_csv(annotations_file, show_col_types = FALSE)
 images <- read_csv(images_file, show_col_types = FALSE) %>% 
   mutate(
-    timestamp = with_tz(timestamp, tzone = "US/Eastern"),
+    timestamp = with_tz(timestamp, tzone = "America/New_York"),
     date = as_date(timestamp),
     split = factor(split, levels = names(split_labels))
   )
@@ -71,7 +71,7 @@ pairs <- read_csv(pairs_file, show_col_types = FALSE)
 
 predictions <- read_csv(predictions_file, show_col_types = FALSE) %>%
   mutate(
-    timestamp = with_tz(timestamp, tzone = "US/Eastern"),
+    timestamp = with_tz(timestamp, tzone = "America/New_York"),
     date = as_date(timestamp),
     hour = hour(timestamp),
     has_rank = !is.na(value) & !is.na(score),
