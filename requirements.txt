@@ -6,4 +6,4 @@ scikit-learn
 Pillow
 tqdm
 boto3
-sagemaker
+sagemaker<3
