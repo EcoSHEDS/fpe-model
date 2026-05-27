@@ -23,8 +23,8 @@ The FPE RankNet model currently uses python=3.9, torch=1.13.1, and torchvision=0
 Install Python with pyenv:
 
 ```sh
-pyenv install -s 3.9.19
-pyenv local 3.9.19
+pyenv install -s 3.9.25
+pyenv local 3.9.25
 ```
 
 Create and activate a virtual environment:
