@@ -5,6 +5,7 @@ data/
 results/
 __pycache__/
 *.pyc
+.venv/
 .ipynb_checkpoints
 
 .env.local

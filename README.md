@@ -20,151 +20,218 @@ Environment should match the python and torch versions of an [available SageMake
 
 The FPE RankNet model currently uses python=3.9, torch=1.13.1, and torchvision=0.14.1.
 
-If using Ubuntu, create conda environment:
+Install Python with pyenv:
 
 ```sh
-conda env create -f environment.yml
+pyenv install -s 3.9.19
+pyenv local 3.9.19
 ```
 
-Otherwise, create the environment manually:
+Create and activate a virtual environment:
 
 ```sh
-conda create -n fpe-rank python=3.9
-conda activate fpe-rank
-conda config --env --add channels conda-forge
-conda install jupyterlab numpy pandas scikit-learn tqdm
-conda install boto3 sagemaker
-
-# see https://pytorch.org/get-started/previous-versions/
-pip install torch==1.13.1
-pip install torchvision==0.14.1
+python -m venv .venv
+source .venv/bin/activate
 ```
 
-Activate conda environment and start Jupyter Lab
+Install dependencies:
 
 ```sh
-conda activate fpe-rank
+python -m pip install -U pip setuptools wheel
+python -m pip install -r requirements-dev.txt
+```
+
+Start Jupyter Lab:
+
+```sh
 jupyter lab
 ```
 
 Then navigate to http://localhost:8888
 
-## Datasets
+## Model Pipeline
 
-Quick start:
+These instructions assume the FPE database, R configuration, AWS profile, and S3 buckets already exist. The Python scripts use the `conte-prod` AWS profile in `us-west-2`; the R scripts read database settings through the R project configuration.
+
+Use a working directory to hold generated datasets, model inputs, downloaded model artifacts, predictions, and reports. A station list is a plain text file with one station ID per line.
 
 ```sh
-FPE_DIR=D:/fpe/datasets
-FPE_STATION=29
-FPE_VARIABLE=FLOW_CFS
-
-cd r
-Rscript rank-dataset.R -d "${FPE_DIR}" -s "${FPE_STATION}" -v "${FPE_VARIABLE}" -o
-# check annotations-cumul.png for training cutoff (annotations-end)
-Rscript rank-input.R -d "${FPE_DIR}" -s "${FPE_STATION}" -v "${FPE_VARIABLE}" -o
+FPE_DIR=/mnt/d/fpe/rank
+STATIONS_FILE="${FPE_DIR}/stations.txt"
+STATION_ID=29
+VARIABLE_ID=FLOW_CFS
+DATASET_CODE=RANK-FLOW-20240709
+MODEL_CODE=RANK-FLOW-20240709
 ```
 
-### Flow Photo Dataset
+The pipeline writes files using this layout:
 
-A flow photo dataset contains the images and annotations associated with a single monitoring station and for a single variable. If observed data (e.g., streamflow) are available for that variable, then the images file includes the observed value at each image timestamp. These observed values are estimated using linear interpolation of the raw observations.
+```text
+${FPE_DIR}/<station-id>/datasets/<dataset-code>/
+${FPE_DIR}/<station-id>/models/<model-code>/
+```
 
-Datasets are stored using the following directory schema
+### 1. Create Station Datasets
 
-`<STATION.NAME>/<VARIABLE>/<DATASET_VERSION>/data`
-
-The `<DATASET_VERSION>` is typically a date stamp (`YYYYMMDD`).
-
-For example: `~/fpe/West Brook 0_01171100/FLOW_CFS/20240326/data`.
-
-Each dataset contains:
-
-- `pairs.csv`: annotations dataset
-- `annotations.png`: plot of annotations
-- `images.csv`: images dataset (with observed data if available)
-- `images.png`: timeseries plot of observed values for each image
-- `station.json`: station info from database
-
-A dataset is generated using the `dataset.R` script.
+Run the R dataset script from the `r/` directory. It reads station metadata, image metadata, observations, and annotations from the FPE database/S3, then writes `images.csv`, `annotations.csv`, `station.json`, summary JSON, and diagnostic plots.
 
 ```sh
 cd r
-Rscript dataset.R <STATION_ID> <VARIABLE_ID> </path/to/datasets>
-Rscript dataset.R 29 FLOW_CFS D:/fpe/datasets
+Rscript rank-dataset.R \
+  --directory "${FPE_DIR}" \
+  --station-id "${STATION_ID}" \
+  --variable-id "${VARIABLE_ID}" \
+  --overwrite \
+  "${DATASET_CODE}"
 ```
 
-### Model Input Dataset
-
-A model input dataset contains the images and annotations for a specific execution of the model training and inference pipeline.
-
-This dataset is generated from a flow photo dataset, which contains all images and annotations for a single station.
-
-The images dataset is filtered based on two sets of parameters:
-
-- MIN_HOUR, MAX_HOUR: minimum and maximum hours of the day (local time) (e.g., MIN_HOUR=7, MAX_HOUR=18 yields a dataset containing only images from 7:00AM to 6:59PM)
-- MIN_MONTH, MAX_MONTH: minimum and maximum month (e.g., MIN_MONTH=4, MAX_MONTH=11 yields dataset containing only images from Apr 1 - Nov 31)
-
-The annotations dataset is filtered to only include image pairs where both images are in the filtered dataset. The annotations can then be further filtered based on:
-
-- `ANNOTATION_MIN_DATE, ANNOTATION_MAX_DATE`: minimum and maximum dates of the annotation pairs
-
-The model inputs will be saved using the following schema:
-
-`/path/to/<STATION.NAME>/<VARIABLE>/<DATASET_VERSION>/models/<MODEL_VERSION>`
-
-Similar to the `<DATASET_VERSION>`, the `<MODEL_VERSION>` is typically a date stamp (`YYYYMMDD`), but does not necessarily need to match the `<DATASET_VERSION>` since the multiple models can be trained from the same dataset.
-
-For example: `~/fpe/rank/West Brook 0_01171100/FLOW_CFS/20240326/models/20240328`.
-
-The inputs are generated using the `rank-input.R` script:
+For a batch of stations:
 
 ```sh
 cd r
-Rscript rank-input.R <DATASET/DIR> <STATION_ID> <VARIABLE_ID> <DATASET_VERSION> <MODEL_VERSION>
-Rscript rank-input.R </path/to/datasets> 29 FLOW_CFS 20240326 20240328
+./batch-rank-dataset.sh "${STATIONS_FILE}" "${FPE_DIR}" "${VARIABLE_ID}" "${DATASET_CODE}"
 ```
 
-## Model Training
+The dataset is saved to `${FPE_DIR}/${STATION_ID}/datasets/${DATASET_CODE}`. Check `annotations-cumul.png`, `images.png`, and `rank-dataset.json` before creating model inputs.
+
+### 2. Create Model Inputs
+
+Still from `r/`, create the SageMaker input files. This script filters images and annotations, creates train/validation pair splits, duplicates reversed pairs, and writes `input/images.csv`, `input/annotations.csv`, `input/pairs.csv`, `input/manifest.json`, `input/station.json`, `input/rank-input.json`, and plots under the model directory.
 
 ```sh
-python src/run-train.py --station-id 68 --directory=/mnt/d/fpe/rank --model-code RANK-FLOW-20240410
-python src/stop-train.py --job-name fpe-rank-20240423-165642
-
-# batch
-./batch-run.sh train /mnt/d/fpe/rank/stations.txt /mnt/d/fpe/rank RANK-FLOW-20240613
+Rscript rank-input.R \
+  --directory "${FPE_DIR}" \
+  --station-id "${STATION_ID}" \
+  --variable-id "${VARIABLE_ID}" \
+  --dataset-code "${DATASET_CODE}" \
+  --overwrite \
+  "${MODEL_CODE}"
 ```
 
-## Model Inference
+Useful filters include `--min-hour`, `--max-hour`, `--min-month`, `--max-month`, `--images-start`, `--images-end`, `--annotations-start`, `--annotations-end`, `--annotations-max-n`, and `--train-frac`. By default, the script keeps images from 7 AM through 6 PM local time and all months.
+
+For a batch of stations:
 
 ```sh
-# run training job
-python src/run-transform.py --station-id 68 --directory=/mnt/d/fpe/rank --model-code RANK-FLOW-20240410
-# wait for transform job to complete
-python src/run-transform-merge.py --station-id 68 --directory=/mnt/d/fpe/rank --model-code RANK-FLOW-20240410
-# wait for merge to complete (fpe-prod-lambda-models)
-python src/run-transform-predictions.py --station-id 68 --directory=/mnt/d/fpe/rank --model-code RANK-FLOW-20240410
-
-# batch
-./batch-run.sh transform /mnt/d/fpe/rank/stations.txt /mnt/d/fpe/rank RANK-FLOW-20240613
-./batch-run.sh transform-merge /mnt/d/fpe/rank/stations.txt /mnt/d/fpe/rank RANK-FLOW-20240613
-./batch-run.sh transform-prediction /mnt/d/fpe/rank/stations.txt /mnt/d/fpe/rank RANK-FLOW-20240613
-```
-
-## Deploy to Database
-
-Create database rows using R:
-
-```sh
-# generates stations-models-db.csv and stations-models-uuid.txt
 cd r
-Rscript rank-model-db.R -t RANK -v FLOW_CFS -c RANK-FLOW-20240613 -s https://usgs-chs-conte-prod-fpe-storage.s3.us-west-2.amazonaws.com/models /mnt/d/fpe/rank/stations.txt
+./batch-rank-input.sh "${STATIONS_FILE}" "${FPE_DIR}" "${VARIABLE_ID}" "${DATASET_CODE}" "${MODEL_CODE}"
 ```
 
-Manually import database rows from `stations-models-db.csv`.
+The model inputs are saved to `${FPE_DIR}/${STATION_ID}/models/${MODEL_CODE}/input`.
 
-Copy diagnostics report and predictions CSV to S3.
+### 3. Train Models
+
+Run SageMaker training from the repository root. `run-train.py` uploads the model input directory to the private model S3 bucket, starts a PyTorch 1.13.1 / Python 3.9 training job, and writes the SageMaker job name to `${FPE_DIR}/${STATION_ID}/models/${MODEL_CODE}/job.txt`.
 
 ```sh
-./batch-deploy.sh /mnt/d/fpe/rank/stations-models-uuid.txt /mnt/d/fpe/rank RANK-FLOW-20240613
+cd ..
+python src/run-train.py \
+  --station-id "${STATION_ID}" \
+  --directory "${FPE_DIR}" \
+  --model-code "${MODEL_CODE}"
+```
+
+For a batch of stations:
+
+```sh
+./batch-run.sh train "${STATIONS_FILE}" "${FPE_DIR}" "${MODEL_CODE}"
+```
+
+The script starts training with `wait=False`; monitor jobs in SageMaker before continuing. To stop a training job:
+
+```sh
+python src/stop-train.py --job-name fpe-rank-YYYYMMDD-HHMMSS
+```
+
+### 4. Run Batch Inference
+
+After training finishes, start SageMaker Batch Transform from the repository root. `run-transform.py` reads `job.txt`, points SageMaker at the trained `model.tar.gz`, uploads a transform manifest for every image in `input/images.csv`, and starts a batch transform job.
+
+```sh
+python src/run-transform.py \
+  --station-id "${STATION_ID}" \
+  --directory "${FPE_DIR}" \
+  --model-code "${MODEL_CODE}"
+```
+
+For a batch of stations:
+
+```sh
+./batch-run.sh transform "${STATIONS_FILE}" "${FPE_DIR}" "${MODEL_CODE}"
+```
+
+The script starts transform jobs with `wait=False`; monitor jobs in SageMaker before merging outputs. To stop a transform job:
+
+```sh
+python src/stop-transform.py --job-name fpe-rank-transform-<station-id>-YYYYMMDD-HHMMSS
+```
+
+### 5. Merge Predictions
+
+After Batch Transform finishes, invoke the model Lambda merger. `run-transform-merge.py` asks `fpe-prod-lambda-models` to combine per-image transform outputs into chunked prediction CSVs in S3. The default chunk size is 5000 images.
+
+```sh
+python src/run-transform-merge.py \
+  --station-id "${STATION_ID}" \
+  --directory "${FPE_DIR}" \
+  --model-code "${MODEL_CODE}"
+```
+
+For a batch of stations:
+
+```sh
+./batch-run.sh transform-merge "${STATIONS_FILE}" "${FPE_DIR}" "${MODEL_CODE}"
+```
+
+Wait for the Lambda invocations to finish, then download and combine the chunked predictions. `run-transform-predictions.py` also downloads the SageMaker `output.tar.gz` and `model.tar.gz` into `${FPE_DIR}/${STATION_ID}/models/${MODEL_CODE}/output`.
+
+```sh
+python src/run-transform-predictions.py \
+  --station-id "${STATION_ID}" \
+  --directory "${FPE_DIR}" \
+  --model-code "${MODEL_CODE}"
+```
+
+For a batch of stations:
+
+```sh
+./batch-run.sh transform-predictions "${STATIONS_FILE}" "${FPE_DIR}" "${MODEL_CODE}"
+```
+
+The final predictions file is saved to `${FPE_DIR}/${STATION_ID}/models/${MODEL_CODE}/transform/predictions.csv`.
+
+### 6. Generate Diagnostics Reports
+
+Generate reports from the `r/` directory after `output/metrics.csv`, `output/args.json`, and `transform/predictions.csv` exist. The report renderer is currently defined in `prediction-report.R` as `generate_report(station_id, model_code, directory)`, and the bottom of that file contains the current batch loop. Update the station file, model code, and directory in that batch block, then run the script from `r/`.
+
+```sh
+cd r
+Rscript prediction-report.R
+```
+
+Each report is copied to `${FPE_DIR}/<station-id>/models/${MODEL_CODE}/${MODEL_CODE}.html`.
+
+### 7. Create Database Rows And Deploy Files
+
+Create model metadata rows from the station list. Run this from `r/`; it writes `<stations-file-stem>-models-db.csv` and `<stations-file-stem>-models-uuid.txt` next to the station list.
+
+```sh
+cd r
+Rscript rank-model-db.R \
+  --model-type RANK \
+  --variable-id "${VARIABLE_ID}" \
+  --model-code "${MODEL_CODE}" \
+  --s3-url https://usgs-chs-conte-prod-fpe-storage.s3.us-west-2.amazonaws.com/models \
+  "${STATIONS_FILE}"
+```
+
+Manually import the generated `*-models-db.csv` into the FPE database `models` table.
+
+Then upload model files to the public storage bucket from the repository root. The deploy script uploads `input/annotations.csv`, `input/images.csv`, `output/model.tar.gz`, the diagnostics HTML report, and `transform/predictions.csv` for each station/UUID pair.
+
+```sh
+cd ..
+./batch-deploy.sh "${FPE_DIR}/stations-models-uuid.txt" "${FPE_DIR}" "${MODEL_CODE}"
 ```
 
 ## License

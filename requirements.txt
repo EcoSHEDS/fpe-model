@@ -1,0 +1,9 @@
+torch==1.13.1
+torchvision==0.14.1
+numpy<2
+pandas
+scikit-learn
+Pillow
+tqdm
+boto3
+sagemaker
