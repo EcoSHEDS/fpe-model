@@ -324,6 +324,7 @@ annotations_raw <- annotations_db %>%
     data = map(url, function (url) {
       resp <- request(url) %>%
         req_retry(max_tries = 3) %>%
+        httr2::req_headers(Referer = "https://usgs.gov/") %>%
         req_perform()
 
       resp %>%
@@ -471,7 +472,7 @@ list(
   values = out_values,
   annotations = out_annotations,
   args = args,
-  created = format(now(tz = "US/Eastern"), usetz = TRUE)
+  created = format(now(tz = "America/New_York"), usetz = TRUE)
 ) %>%
   write_json(file.path(dataset_dir, "rank-dataset.json"), pretty = TRUE, auto_unbox = TRUE)
 

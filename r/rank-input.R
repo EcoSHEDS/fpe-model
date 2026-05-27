@@ -15,7 +15,7 @@ suppressPackageStartupMessages({
   library(igraph)
 })
 
-default_end <- format(today(tz = "US/Eastern"), "%Y-%m-%d")
+default_end <- format(today(tz = "America/New_York"), "%Y-%m-%d")
 
 parser <- OptionParser()
 parser <- add_option(
@@ -649,6 +649,6 @@ list(
     )
   ),
   args = args,
-  created_at = format_ISO8601(now(tz="US/Eastern"), usetz = TRUE)
+  created_at = format_ISO8601(now(tz="America/New_York"), usetz = TRUE)
 ) %>%
   write_json(file.path(input_dir, "rank-input.json"), auto_unbox = TRUE, pretty = TRUE)

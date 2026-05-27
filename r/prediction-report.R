@@ -23,6 +23,6 @@ generate_report <- function (station_id, model_code, directory = "/mnt/d/fpe/ran
 
 # generate_report(41, "RANK-FLOW-20251212", directory = "/mnt/d/fpe/rank/20251212/")
 
-station_ids <- read_csv("/mnt/d/fpe/rank/20251212/stations.txt", col_names = "station_id")$station_id
-walk(station_ids, \(x) generate_report(x, "RANK-FLOW-20251212", directory = "/mnt/d/fpe/rank/20251212/"))
+station_ids <- read_csv("/mnt/d/fpe/rank/20260527/stations-algae.txt", col_names = "station_id")$station_id
+walk(station_ids, \(x) generate_report(x, "RANK-ALGAE-20260527", directory = "/mnt/d/fpe/rank/20260527/"))
 
