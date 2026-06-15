@@ -44,7 +44,7 @@ def test_filter_schema_and_order(monkeypatch):
     _patch(monkeypatch)
     stats = {}
     out = fpe_imageset.build_imageset_dataframe(
-        conn=None, imageset_id=9, station_id=42,
+        conn=None, imageset_uuid="e8d465f6-5784-4231-967f-9000428e9748", station_id=42,
         timezone="America/New_York", filters=fpe_imageset.DEFAULT_FILTERS, stats=stats,
     )
     # exact column schema / order that images.csv requires
@@ -65,7 +65,7 @@ def test_station_mismatch_raises(monkeypatch):
     _patch(monkeypatch, station_id=99)
     with pytest.raises(Exception, match="belongs to station 99"):
         fpe_imageset.build_imageset_dataframe(
-            conn=None, imageset_id=9, station_id=42,
+            conn=None, imageset_uuid="e8d465f6-5784-4231-967f-9000428e9748", station_id=42,
             timezone="America/New_York", filters=fpe_imageset.DEFAULT_FILTERS,
         )
 
@@ -74,7 +74,7 @@ def test_imageset_not_found_raises(monkeypatch):
     monkeypatch.setattr(fpe_imageset, "fetch_imageset_station", lambda conn, iid: None)
     with pytest.raises(Exception, match="imageset not found"):
         fpe_imageset.build_imageset_dataframe(
-            conn=None, imageset_id=9, station_id=42,
+            conn=None, imageset_uuid="e8d465f6-5784-4231-967f-9000428e9748", station_id=42,
             timezone="America/New_York", filters=fpe_imageset.DEFAULT_FILTERS,
         )
 
@@ -85,7 +85,7 @@ def test_empty_after_filter_raises(monkeypatch):
     _patch(monkeypatch, images=only_dropped)
     with pytest.raises(Exception, match="no images remain"):
         fpe_imageset.build_imageset_dataframe(
-            conn=None, imageset_id=9, station_id=42,
+            conn=None, imageset_uuid="e8d465f6-5784-4231-967f-9000428e9748", station_id=42,
             timezone="America/New_York", filters=fpe_imageset.DEFAULT_FILTERS,
         )
 

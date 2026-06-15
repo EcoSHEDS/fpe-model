@@ -2,10 +2,10 @@
 """Self-contained AWS Batch entrypoint: score one imageset, write a drop-in predictions.csv.
 
 Replaces the SageMaker transform -> merge -> predictions chain for incremental imageset
-scoring. Given station / model-code / imageset IDs, this:
+scoring. Given a station id, model code, and imageset UUID, this:
   1. reads the model's station.json + rank-input.json from the model bucket (timezone, filters),
   2. looks up the model UUID in the DB and pulls models/{uuid}/model.tar.gz from the storage bucket,
-  3. builds the filtered DONE-image dataframe from Postgres (fpe_imageset),
+  3. builds the filtered DONE-image dataframe from Postgres (fpe_imageset; imageset looked up by uuid),
   4. runs batched, parity-preserving inference on CPU (fpe_inference),
   5. writes predictions.csv (split,image_id,timestamp,filename,url,value,score) to the imageset
      transform key on the model bucket -- identical schema/location to the SageMaker path.
@@ -15,9 +15,9 @@ env (DB_HOST/DB_PORT/DB_NAME/DB_USER/DB_PASSWORD). Any failure exits non-zero so
 the job FAILED.
 
 Usage:
-  python src/predict-imageset.py --station-id S --model-code M --imageset-id I \
+  python src/predict-imageset.py --station-id S --model-code M --imageset-uuid U \
       [--batch-size 32] [--num-workers 4]
-Env equivalents: STATION_ID, MODEL_CODE, IMAGESET_ID, BATCH_SIZE, NUM_WORKERS.
+Env equivalents: STATION_ID, MODEL_CODE, IMAGESET_UUID, BATCH_SIZE, NUM_WORKERS.
 """
 
 import argparse
@@ -84,10 +84,10 @@ def _download_and_extract_model(s3, uuid, workdir):
     return model_dir
 
 
-def predict_imageset(station_id, model_code, imageset_id, batch_size, num_workers):
+def predict_imageset(station_id, model_code, imageset_uuid, batch_size, num_workers):
     print(
         f"predict_imageset: station={station_id} model={model_code} "
-        f"imageset={imageset_id} batch_size={batch_size} num_workers={num_workers}"
+        f"imageset={imageset_uuid} batch_size={batch_size} num_workers={num_workers}"
     )
     s3 = _make_s3()
 
@@ -105,7 +105,7 @@ def predict_imageset(station_id, model_code, imageset_id, batch_size, num_worker
     try:
         uuid = fetch_model_uuid(conn, station_id, model_code)
         print(f"model uuid: {uuid}")
-        df = build_imageset_dataframe(conn, imageset_id, station_id, timezone, filters)
+        df = build_imageset_dataframe(conn, imageset_uuid, station_id, timezone, filters)
     finally:
         conn.close()
 
@@ -124,7 +124,7 @@ def predict_imageset(station_id, model_code, imageset_id, batch_size, num_worker
         )
 
     # write the drop-in predictions.csv to the imageset transform key on the model bucket
-    out_key = f"{model_key}/imagesets/{imageset_id}/transform/predictions.csv"
+    out_key = f"{model_key}/imagesets/{imageset_uuid}/transform/predictions.csv"
     buf = StringIO()
     result.to_csv(buf, index=False)
     s3.put_object(Bucket=MODEL_BUCKET, Key=out_key, Body=buf.getvalue())
@@ -153,18 +153,18 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--station-id", type=str, default=None)
     parser.add_argument("--model-code", type=str, default=None)
-    parser.add_argument("--imageset-id", type=str, default=None)
+    parser.add_argument("--imageset-uuid", type=str, default=None)
     parser.add_argument("--batch-size", type=int, default=None)
     parser.add_argument("--num-workers", type=int, default=None)
     args = parser.parse_args()
 
     station_id = _resolve(args.station_id, "STATION_ID", required=True)
     model_code = _resolve(args.model_code, "MODEL_CODE", required=True)
-    imageset_id = _resolve(args.imageset_id, "IMAGESET_ID", required=True)
+    imageset_uuid = _resolve(args.imageset_uuid, "IMAGESET_UUID", required=True)
     batch_size = _resolve(args.batch_size, "BATCH_SIZE", default=32, cast=int)
     num_workers = _resolve(args.num_workers, "NUM_WORKERS", default=4, cast=int)
 
-    predict_imageset(station_id, model_code, imageset_id, batch_size, num_workers)
+    predict_imageset(station_id, model_code, imageset_uuid, batch_size, num_workers)
 
 
 if __name__ == "__main__":

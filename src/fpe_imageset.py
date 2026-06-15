@@ -115,24 +115,25 @@ def fetch_model_uuid(conn, station_id, model_code):
     return str(rows[0][0])
 
 
-def fetch_imageset_station(conn, imageset_id):
+def fetch_imageset_station(conn, imageset_uuid):
     with conn.cursor() as cur:
-        cur.execute("SELECT station_id FROM imagesets WHERE id = %s", (imageset_id,))
+        cur.execute("SELECT station_id FROM imagesets WHERE uuid = %s", (imageset_uuid,))
         row = cur.fetchone()
     return row[0] if row else None
 
 
-def fetch_imageset_images(conn, imageset_id):
+def fetch_imageset_images(conn, imageset_uuid):
     sql = """
         SELECT i.id AS image_id, i.imageset_id, i.timestamp, i.full_url AS url
         FROM images i
-        WHERE i.imageset_id = %s
+        JOIN imagesets iset ON iset.id = i.imageset_id
+        WHERE iset.uuid = %s
         AND i.status = 'DONE'
     """
-    return pd.read_sql_query(sql, conn, params=(imageset_id,))
+    return pd.read_sql_query(sql, conn, params=(imageset_uuid,))
 
 
-def build_imageset_dataframe(conn, imageset_id, station_id, timezone, filters, stats=None):
+def build_imageset_dataframe(conn, imageset_uuid, station_id, timezone, filters, stats=None):
     """Fetch + filter a single imageset's DONE images into the transform-input schema.
 
     Validates the imageset belongs to ``station_id``, fetches its DONE images, applies
@@ -140,23 +141,26 @@ def build_imageset_dataframe(conn, imageset_id, station_id, timezone, filters, s
     dataframe with columns ``split, image_id, timestamp, filename, url, value`` sorted by
     timestamp -- the transform-input schema consumed by the inference step.
 
+    The imageset is identified by its ``uuid`` (the public identifier used in image storage
+    paths, ``imagesets/{uuid}/...``), not the integer primary key.
+
     If ``stats`` is a dict, it is populated with ``total`` (DONE images before filtering)
     and ``filtered`` (rows returned) so callers can log counts without re-querying.
 
     Raises on: imageset not found, imageset/station mismatch, no DONE images, or no
     images remaining after the filter.
     """
-    imageset_station_id = fetch_imageset_station(conn, imageset_id)
+    imageset_station_id = fetch_imageset_station(conn, imageset_uuid)
     if imageset_station_id is None:
-        raise Exception(f"imageset not found (id={imageset_id})")
+        raise Exception(f"imageset not found (uuid={imageset_uuid})")
     if str(imageset_station_id) != str(station_id):
         raise Exception(
-            f"imageset {imageset_id} belongs to station {imageset_station_id}, "
+            f"imageset {imageset_uuid} belongs to station {imageset_station_id}, "
             f"not station {station_id}"
         )
 
-    print(f"fetching: images (imageset_id={imageset_id})")
-    images = fetch_imageset_images(conn, imageset_id)
+    print(f"fetching: images (imageset_uuid={imageset_uuid})")
+    images = fetch_imageset_images(conn, imageset_uuid)
 
     n_total = len(images)
     if stats is not None:
@@ -164,8 +168,8 @@ def build_imageset_dataframe(conn, imageset_id, station_id, timezone, filters, s
     print(f"# images (DONE): {n_total}")
     if n_total == 0:
         raise Exception(
-            f"no DONE images found for imageset {imageset_id} "
-            f"(still processing, or wrong imageset id)"
+            f"no DONE images found for imageset {imageset_uuid} "
+            f"(still processing, or wrong imageset uuid)"
         )
 
     # derive filename from url (no leading slash; manifest prefixes s3://...-storage/)

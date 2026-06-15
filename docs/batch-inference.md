@@ -13,7 +13,7 @@ images.
 
 ## What the job does
 
-Given a station id, model code, and imageset id, the container:
+Given a station id, model code, and imageset uuid, the container:
 
 1. reads the model's `station.json` + `rank-input.json` from the model bucket (timezone + the
    daytime/seasonal filters the model was built with);
@@ -25,9 +25,10 @@ Given a station id, model code, and imageset id, the container:
    decode with model compute;
 5. writes `predictions.csv` with columns `split,image_id,timestamp,filename,url,value,score` to:
    ```
-   s3://usgs-chs-conte-prod-fpe-models/rank/{station_id}/models/{model_code}/imagesets/{imageset_id}/transform/predictions.csv
+   s3://usgs-chs-conte-prod-fpe-models/rank/{station_id}/models/{model_code}/imagesets/{imageset_uuid}/transform/predictions.csv
    ```
-   — the same schema and location the SageMaker `run-transform-predictions.py --imageset-id` path produced.
+   — the same `predictions.csv` schema the station-wide SageMaker pipeline produces, namespaced
+   under the imageset uuid.
 
 Any failure (model not found, no `DONE` images, empty after filtering, etc.) exits non-zero so
 Batch marks the job **FAILED**.
@@ -50,7 +51,7 @@ the CLI arg wins when both are set).
 |---|---|---|---|---|
 | `--station-id` | `STATION_ID` | yes | — | FPE station id |
 | `--model-code` | `MODEL_CODE` | yes | — | model code (e.g. `RANK-FLOW-20240709`) |
-| `--imageset-id` | `IMAGESET_ID` | yes | — | imageset to score |
+| `--imageset-uuid` | `IMAGESET_UUID` | yes | — | imageset UUID to score (the `imagesets.uuid`, as in storage paths `imagesets/{uuid}/...`) |
 | `--batch-size` | `BATCH_SIZE` | no | `32` | inference batch size |
 | `--num-workers` | `NUM_WORKERS` | no | `4` | `DataLoader` workers (S3 download/decode parallelism) |
 
@@ -101,7 +102,7 @@ environment has no egress.
 
 ```sh
 docker run --rm \
-  -e STATION_ID=29 -e MODEL_CODE=RANK-FLOW-20240709 -e IMAGESET_ID=1234 \
+  -e STATION_ID=29 -e MODEL_CODE=RANK-FLOW-20240709 -e IMAGESET_UUID=e8d465f6-5784-4231-967f-9000428e9748 \
   -e DB_HOST=... -e DB_PORT=5432 -e DB_NAME=... -e DB_USER=... -e DB_PASSWORD=... \
   -e AWS_ACCESS_KEY_ID=... -e AWS_SECRET_ACCESS_KEY=... -e AWS_SESSION_TOKEN=... \
   -e AWS_REGION=us-west-2 \
@@ -111,7 +112,7 @@ docker run --rm \
 You can also run the entrypoint without Docker (needs `requirements.txt` + torch installed):
 
 ```sh
-STATION_ID=29 MODEL_CODE=RANK-FLOW-20240709 IMAGESET_ID=1234 \
+STATION_ID=29 MODEL_CODE=RANK-FLOW-20240709 IMAGESET_UUID=e8d465f6-5784-4231-967f-9000428e9748 \
 DB_HOST=... DB_PORT=5432 DB_NAME=... DB_USER=... DB_PASSWORD=... \
 AWS_PROFILE=conte-prod \
 python src/predict-imageset.py
@@ -123,7 +124,7 @@ The compute environment, job queue, and IAM are infra-managed; this repo provide
 container and the code it runs. The job definition must supply:
 
 - **Container image:** the ECR URI pushed above.
-- **Command / environment:** `STATION_ID`, `MODEL_CODE`, `IMAGESET_ID` (and optionally
+- **Command / environment:** `STATION_ID`, `MODEL_CODE`, `IMAGESET_UUID` (and optionally
   `BATCH_SIZE`, `NUM_WORKERS`). These can be `containerProperties.command` overrides or
   `environment` entries; the entrypoint accepts either form.
 - **Database credentials:** `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`. Inject
