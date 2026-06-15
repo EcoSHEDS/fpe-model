@@ -91,6 +91,7 @@ def test_empty_after_filter_raises(monkeypatch):
 
 
 def test_get_db_config_missing_env(monkeypatch):
+    monkeypatch.delenv("FPE_DB_SECRET", raising=False)
     for var in ("DB_HOST", "DB_PORT", "DB_NAME", "DB_USER", "DB_PASSWORD"):
         monkeypatch.delenv(var, raising=False)
     with pytest.raises(RuntimeError, match="DB_HOST"):
@@ -98,6 +99,7 @@ def test_get_db_config_missing_env(monkeypatch):
 
 
 def test_get_db_config_reads_env(monkeypatch):
+    monkeypatch.delenv("FPE_DB_SECRET", raising=False)
     monkeypatch.setenv("DB_HOST", "h")
     monkeypatch.setenv("DB_PORT", "5432")
     monkeypatch.setenv("DB_NAME", "n")
@@ -105,6 +107,36 @@ def test_get_db_config_reads_env(monkeypatch):
     monkeypatch.setenv("DB_PASSWORD", "p")
     cfg = fpe_imageset.get_db_config()
     assert cfg == {"host": "h", "port": "5432", "dbname": "n", "user": "u", "password": "p"}
+
+
+def test_get_db_config_prefers_secret(monkeypatch):
+    # when FPE_DB_SECRET is set, get_db_config delegates to the secret path (not env vars)
+    monkeypatch.setenv("FPE_DB_SECRET", "fpe/db")
+    monkeypatch.setattr(
+        fpe_imageset, "_db_config_from_secret", lambda name: {"from": name}
+    )
+    assert fpe_imageset.get_db_config() == {"from": "fpe/db"}
+
+
+def test_map_secret_rds_style():
+    # RDS-managed-secret key style: dbname / username
+    cfg = fpe_imageset._map_secret_to_db_config(
+        {"host": "h", "port": 5432, "dbname": "n", "username": "u", "password": "p"}
+    )
+    assert cfg == {"host": "h", "port": 5432, "dbname": "n", "user": "u", "password": "p"}
+
+
+def test_map_secret_config_style():
+    # R config.yml key style: database / user
+    cfg = fpe_imageset._map_secret_to_db_config(
+        {"host": "h", "port": 5432, "database": "n", "user": "u", "password": "p"}
+    )
+    assert cfg == {"host": "h", "port": 5432, "dbname": "n", "user": "u", "password": "p"}
+
+
+def test_map_secret_missing_field_raises():
+    with pytest.raises(RuntimeError, match="missing a required field"):
+        fpe_imageset._map_secret_to_db_config({"host": "h", "port": 5432})
 
 
 class _FakeCursor:

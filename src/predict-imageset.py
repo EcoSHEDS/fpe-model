@@ -10,9 +10,11 @@ scoring. Given a station id, model code, and imageset UUID, this:
   5. writes predictions.csv (split,image_id,timestamp,filename,url,value,score) to the imageset
      transform key on the model bucket -- identical schema/location to the SageMaker path.
 
-Params come from CLI args or env vars (Batch may pass either); DB credentials come only from
-env (DB_HOST/DB_PORT/DB_NAME/DB_USER/DB_PASSWORD). Any failure exits non-zero so Batch marks
-the job FAILED.
+Params come from CLI args or env vars (Batch may pass either). DB credentials come from
+FPE_DB_SECRET (a Secrets Manager secret name) if set, else the discrete DB_HOST/DB_PORT/
+DB_NAME/DB_USER/DB_PASSWORD vars. The S3 buckets default to the prod buckets but can be
+overridden via FPE_S3_STORAGE_BUCKET / FPE_S3_MODEL_BUCKET. Any failure exits non-zero so
+Batch marks the job FAILED.
 
 Usage:
   python src/predict-imageset.py --station-id S --model-code M --imageset-uuid U \
@@ -42,9 +44,9 @@ from fpe_imageset import (
 # fpe_inference (and torch) is imported lazily inside predict_imageset() so that --help and
 # argument validation work without torch, and bad args fail fast before the heavy import.
 
-# buckets / region (reuse existing constants from the SageMaker scripts)
-MODEL_BUCKET = "usgs-chs-conte-prod-fpe-models"
-STORAGE_BUCKET = "usgs-chs-conte-prod-fpe-storage"
+# buckets / region: default to the prod buckets (as in the SageMaker scripts), overridable by env
+MODEL_BUCKET = os.environ.get("FPE_S3_MODEL_BUCKET", "usgs-chs-conte-prod-fpe-models")
+STORAGE_BUCKET = os.environ.get("FPE_S3_STORAGE_BUCKET", "usgs-chs-conte-prod-fpe-storage")
 REGION = os.environ.get("AWS_REGION", "us-west-2")
 
 

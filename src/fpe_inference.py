@@ -18,6 +18,12 @@ Inference runs on CPU (this container is CPU-only). A DataLoader with num_worker
 S3 download + image decode/transform with the model's forward pass; S3 download is typically
 the bottleneck for this small model. boto3 clients are created lazily per worker process
 (clients are not fork/spawn-safe to share).
+
+run_inference sets PyTorch's ``file_system`` tensor-sharing strategy so DataLoader workers
+pass tensors via temp files instead of /dev/shm. This is required on AWS Fargate, whose
+/dev/shm is a fixed ~64 MB and cannot be enlarged (no linuxParameters.sharedMemorySize); the
+default ``file_descriptor`` strategy overflows it and workers die with "Unexpected bus error
+... insufficient shared memory (shm)".
 """
 
 import io
@@ -136,6 +142,14 @@ def run_inference(
     module.to(device)
     module.eval()
     eval_transform = module.transforms["eval"]
+
+    # DataLoader workers hand loaded tensors to the main process through shared memory
+    # (/dev/shm). On Fargate /dev/shm is a fixed ~64 MB that image batches overflow, and it
+    # cannot be enlarged (no linuxParameters.sharedMemorySize on Fargate, and --shm-size is
+    # local-docker only) -> "Unexpected bus error ... insufficient shared memory (shm)". The
+    # file_system strategy passes tensors via temp files instead, so it works regardless.
+    if num_workers > 0:
+        torch.multiprocessing.set_sharing_strategy("file_system")
 
     dataset = S3ImageDataset(
         df, storage_bucket, eval_transform, fetch_bytes=fetch_bytes, region=region

@@ -55,16 +55,22 @@ the CLI arg wins when both are set).
 | `--batch-size` | `BATCH_SIZE` | no | `32` | inference batch size |
 | `--num-workers` | `NUM_WORKERS` | no | `4` | `DataLoader` workers (S3 download/decode parallelism) |
 
-Database connection (env only — there is **no** `r/config.yml` and no Secrets Manager API call
-in the container code):
+Database connection. Preferred: set `FPE_DB_SECRET` to a Secrets Manager secret name; the
+container fetches and parses it (using the Batch job role's `SecretsManagerReadWrite`). The
+secret JSON may use either `database`/`user` or `dbname`/`username` for those two fields. If
+`FPE_DB_SECRET` is unset, the container falls back to discrete env vars:
 
 | Env var | Description |
 |---|---|
-| `DB_HOST` | Postgres host |
-| `DB_PORT` | Postgres port |
-| `DB_NAME` | database name |
-| `DB_USER` | database user |
-| `DB_PASSWORD` | database password |
+| `FPE_DB_SECRET` | Secrets Manager secret name with DB credentials (preferred) |
+| `DB_HOST` / `DB_PORT` / `DB_NAME` / `DB_USER` / `DB_PASSWORD` | discrete fallback when no secret is set |
+
+Optional bucket overrides (default to the prod buckets):
+
+| Env var | Default | Description |
+|---|---|---|
+| `FPE_S3_STORAGE_BUCKET` | `usgs-chs-conte-prod-fpe-storage` | images + deployed `model.tar.gz` |
+| `FPE_S3_MODEL_BUCKET` | `usgs-chs-conte-prod-fpe-models` | model `input/` config + predictions output |
 
 `AWS_REGION` is optional (defaults to `us-west-2`).
 
@@ -127,12 +133,11 @@ container and the code it runs. The job definition must supply:
 - **Command / environment:** `STATION_ID`, `MODEL_CODE`, `IMAGESET_UUID` (and optionally
   `BATCH_SIZE`, `NUM_WORKERS`). These can be `containerProperties.command` overrides or
   `environment` entries; the entrypoint accepts either form.
-- **Database credentials:** `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`. Inject
-  these from Secrets Manager via the job definition `secrets` / `valueFrom` block. The
-  `secretsmanager:GetSecretValue` (and any KMS `kms:Decrypt`) permission then lives on the Batch
-  **execution role** — infra-side, never baked into the image.
-- **Compute:** CPU only — size `vcpus`/`memory` in the job definition for the chosen `--num-workers`
-  and image volume. No GPU resource or GPU compute environment is required (Fargate is viable too).
+- **Database credentials:** set `FPE_DB_SECRET` to the DB secret name; the container fetches it
+  at runtime via the **job role** (which needs `secretsmanager:GetSecretValue`). No job-definition
+  `secrets`/`valueFrom` block is required, so the **execution role** needs no secrets permission.
+- **Buckets (optional):** `FPE_S3_STORAGE_BUCKET`, `FPE_S3_MODEL_BUCKET` (default to the prod buckets).
+- **Compute:** CPU only — Fargate is the intended launch type. No GPU resource is required.
 
 ### IAM (Batch *job* role)
 
@@ -144,9 +149,11 @@ The role the container assumes needs:
 | `s3:GetObject` | `arn:aws:s3:::usgs-chs-conte-prod-fpe-storage/*` | download imageset images |
 | `s3:GetObject` | `arn:aws:s3:::usgs-chs-conte-prod-fpe-models/rank/*` | read `station.json` / `rank-input.json` |
 | `s3:PutObject` | `arn:aws:s3:::usgs-chs-conte-prod-fpe-models/rank/*` | write `predictions.csv` |
+| `secretsmanager:GetSecretValue` | the DB secret ARN | read `FPE_DB_SECRET` at runtime |
 
-Plus network reachability to the Postgres host (security group / subnet). If DB creds come from
-Secrets Manager, `secretsmanager:GetSecretValue` goes on the **execution** role (not the job role).
+Plus network reachability to the Postgres host (security group / subnet). The existing FPE Batch
+job role already grants `AmazonS3FullAccess` + `SecretsManagerReadWrite`, which covers all of the
+above — see the CloudFormation section below for reusing it.
 
 ## Notes / tuning
 
@@ -156,5 +163,96 @@ Secrets Manager, `secretsmanager:GetSecretValue` goes on the **execution** role 
   whole job.
 - **S3 throttling:** the S3 client uses adaptive retries; keep `num_workers` bounded on very
   large imagesets.
+- **Shared memory (Fargate):** `run_inference` sets PyTorch's `file_system` tensor-sharing
+  strategy, so the `DataLoader` workers don't depend on `/dev/shm`. This is **required on
+  Fargate**, whose `/dev/shm` is a fixed ~64 MB that cannot be enlarged (no
+  `linuxParameters.sharedMemorySize` on Fargate; `--shm-size` is local-docker only). Without it,
+  workers die with "Unexpected bus error … insufficient shared memory (shm)".
 - **Timeout:** size the Batch job timeout to expected throughput for tens-of-thousands-image
   imagesets.
+
+## CloudFormation (reuse the existing FPE Batch stack)
+
+The existing FPE Batch CloudFormation stack (Fargate compute environment, job queue, service /
+execution / job roles, and the failed-job EventBridge → SNS rule) is workload-agnostic and can be
+reused as-is. The job role already grants `AmazonS3FullAccess` + `SecretsManagerReadWrite`, and the
+failed-job rule matches **all** Batch `FAILED` events, so predict jobs get failure alerts for free.
+Only **two new resources** are needed (plus one new parameter for the model bucket); model them on
+the existing `…Pii` job.
+
+Add to `Parameters`:
+
+```json
+"modelBucketName": {
+  "Description": "Name of S3 model bucket (model input config + predictions output)",
+  "Type": "String"
+}
+```
+
+Add to `Resources`:
+
+```json
+"RepositoryPredict": {
+  "Type": "AWS::ECR::Repository",
+  "Properties": {
+    "RepositoryName": { "Fn::Join": ["-", [{ "Ref": "appName" }, { "Ref": "env" }, "batch-predict"]] }
+  }
+},
+"JobDefinitionPredict": {
+  "Type": "AWS::Batch::JobDefinition",
+  "Properties": {
+    "Type": "container",
+    "JobDefinitionName": { "Fn::Join": ["-", [{ "Ref": "appName" }, { "Ref": "env" }, "batch-job-definition-predict"]] },
+    "PlatformCapabilities": ["FARGATE"],
+    "ContainerProperties": {
+      "Image": { "Fn::Sub": "${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${RepositoryPredict}:latest" },
+      "ExecutionRoleArn": { "Fn::GetAtt": ["ExecutionRole", "Arn"] },
+      "JobRoleArn": { "Fn::GetAtt": ["JobRole", "Arn"] },
+      "FargatePlatformConfiguration": { "PlatformVersion": "LATEST" },
+      "ResourceRequirements": [
+        { "Type": "MEMORY", "Value": 8192 },
+        { "Type": "VCPU", "Value": 4.0 }
+      ],
+      "Command": ["--help"],
+      "NetworkConfiguration": { "AssignPublicIp": "ENABLED" },
+      "Environment": [
+        { "Name": "AWS_REGION", "Value": { "Ref": "AWS::Region" } },
+        { "Name": "FPE_DB_SECRET", "Value": { "Ref": "dbSecretName" } },
+        { "Name": "FPE_S3_STORAGE_BUCKET", "Value": { "Ref": "storageBucketName" } },
+        { "Name": "FPE_S3_MODEL_BUCKET", "Value": { "Ref": "modelBucketName" } }
+      ]
+    },
+    "RetryStrategy": { "Attempts": 1 }
+  }
+}
+```
+
+Optionally add to `Outputs` (mirrors the processor/PII outputs):
+
+```json
+"JobDefinitionNamePredict": {
+  "Description": "Predict job definition name",
+  "Value": { "Fn::Join": ["-", [{ "Ref": "appName" }, { "Ref": "env" }, "batch-job-definition-predict"]] }
+},
+"RepositoryUrlPredict": {
+  "Description": "Batch predict repository URL",
+  "Value": { "Fn::Sub": "${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${RepositoryPredict}" }
+}
+```
+
+`Command: ["--help"]` is just a safe default; per-imageset runs pass the real args via
+`containerOverrides` at submit time:
+
+```sh
+aws batch submit-job \
+  --job-name "predict-<imageset-uuid>" \
+  --job-queue   "${appName}-${env}-batch-job-queue" \
+  --job-definition "${appName}-${env}-batch-job-definition-predict" \
+  --container-overrides '{"command":["--station-id","29","--model-code","RANK-FLOW-20240410","--imageset-uuid","<imageset-uuid>"]}' \
+  --region us-west-2 --profile conte-prod
+```
+
+Sizing: 4 vCPU / 8 GB is a reasonable Fargate default for this small model; raise vCPU/memory and
+`NUM_WORKERS` together if S3 download throughput needs to scale. (Fargate gives no GPU and a fixed
+small `/dev/shm` — both already handled: the container is CPU-only and uses the `file_system`
+DataLoader strategy.)

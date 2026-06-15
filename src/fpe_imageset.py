@@ -10,6 +10,7 @@ Secrets Manager API call). In AWS Batch these vars are typically injected from
 Secrets Manager via the job definition ``secrets``/``valueFrom`` block (infra-side).
 """
 
+import json
 import os
 from urllib.parse import urlparse
 
@@ -44,11 +45,20 @@ def get_url_path(url):
 
 
 def get_db_config():
-    """Build the DB connection params from environment variables only.
+    """Build the DB connection params, preferring a Secrets Manager secret.
 
-    Reads DB_HOST, DB_PORT, DB_NAME, DB_USER, DB_PASSWORD. Raises a clear error
-    listing every variable that is missing or empty.
+    If ``FPE_DB_SECRET`` is set, fetch that secret (a JSON document) from Secrets Manager
+    and map its fields to connection params (matches the existing FPE batch jobs and the
+    Batch job role's SecretsManagerReadWrite). Otherwise fall back to the discrete
+    DB_HOST/DB_PORT/DB_NAME/DB_USER/DB_PASSWORD environment variables.
     """
+    secret_name = os.environ.get("FPE_DB_SECRET")
+    if secret_name:
+        return _db_config_from_secret(secret_name)
+    return _db_config_from_env()
+
+
+def _db_config_from_env():
     config = {}
     missing = []
     for key, env_var in _DB_ENV_VARS.items():
@@ -61,9 +71,42 @@ def get_db_config():
         raise RuntimeError(
             "missing required database environment variable(s): "
             + ", ".join(missing)
-            + " (set DB_HOST, DB_PORT, DB_NAME, DB_USER, DB_PASSWORD)"
+            + " (set DB_HOST, DB_PORT, DB_NAME, DB_USER, DB_PASSWORD, or set FPE_DB_SECRET)"
         )
     return config
+
+
+def _map_secret_to_db_config(secret):
+    """Map a DB-credentials secret dict to psycopg2 connection params.
+
+    Accepts both the R `config` key style (database/user) and the RDS-managed-secret
+    style (dbname/username) for the db name and user fields.
+    """
+    def pick(*keys):
+        for k in keys:
+            value = secret.get(k)
+            if value is not None and value != "":
+                return value
+        raise RuntimeError(
+            f"FPE_DB_SECRET is missing a required field (one of {keys})"
+        )
+
+    return {
+        "host": pick("host"),
+        "port": pick("port"),
+        "dbname": pick("dbname", "database"),
+        "user": pick("user", "username"),
+        "password": pick("password"),
+    }
+
+
+def _db_config_from_secret(secret_name):
+    import boto3  # lazy: only needed when a secret is configured
+
+    region = os.environ.get("AWS_REGION", "us-west-2")
+    client = boto3.client("secretsmanager", region_name=region)
+    secret = json.loads(client.get_secret_value(SecretId=secret_name)["SecretString"])
+    return _map_secret_to_db_config(secret)
 
 
 def connect_db(db):
