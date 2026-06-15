@@ -7,3 +7,4 @@ Pillow
 tqdm
 boto3
 sagemaker<3
+psycopg2-binary

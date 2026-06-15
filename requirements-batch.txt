@@ -1,0 +1,17 @@
+# Runtime deps for the AWS Batch inference container (predict-imageset.py).
+# The slim base image has no torch, so torch/torchvision CPU wheels are installed separately in the
+# Dockerfile (from the PyTorch CPU index). This file holds the remaining non-torch deps; sagemaker is
+# intentionally excluded.
+#
+# numpy<2 is required: torch 1.13.1 is built against the numpy 1.x ABI; numpy 2.x breaks it.
+# scikit-learn is needed because transform.py imports datasets.py, which imports
+# sklearn.model_selection (StratifiedShuffleSplit) at module load.
+# (pyyaml is NOT needed: the r/config.yml credential path was removed in favor of env vars.)
+
+pandas
+numpy<2
+Pillow
+tqdm
+boto3
+psycopg2-binary
+scikit-learn

@@ -1,0 +1,33 @@
+# keep the build context small and prevent secrets/junk from entering the image.
+# (the Dockerfile COPYs an explicit file list, but this guards against accidental leaks.)
+
+# R project + credentials (r/config.yml holds DB secrets -- must never enter the image)
+r/
+
+# virtualenvs
+.venv/
+venv/
+env/
+
+# notebooks and data
+*.ipynb
+**/.ipynb_checkpoints/
+data/
+*.csv
+*.tar.gz
+*.pth
+
+# python caches / build artifacts
+__pycache__/
+**/__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+*.egg-info/
+
+# vcs / tooling / docs not needed at runtime
+.git/
+.gitignore
+tasks/
+tests/
+*.md

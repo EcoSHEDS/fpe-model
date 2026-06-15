@@ -200,6 +200,12 @@ For a batch of stations:
 
 The final predictions file is saved to `${FPE_DIR}/${STATION_ID}/models/${MODEL_CODE}/transform/predictions.csv`.
 
+> **Scoring a single imageset?** For incremental imagesets uploaded after training, use the
+> containerized AWS Batch job, which scores one imageset end-to-end (batched GPU/CPU inference,
+> no Lambda merge) and writes a drop-in `predictions.csv`. See
+> [docs/batch-inference.md](docs/batch-inference.md). The SageMaker transform path above always
+> scores the full station-wide input.
+
 ### 6. Generate Diagnostics Reports
 
 Generate reports from the `r/` directory after `output/metrics.csv`, `output/args.json`, and `transform/predictions.csv` exist. The report renderer is currently defined in `prediction-report.R` as `generate_report(station_id, model_code, directory)`, and the bottom of that file contains the current batch loop. Update the station file, model code, and directory in that batch block, then run the script from `r/`.
