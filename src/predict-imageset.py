@@ -12,7 +12,8 @@ scoring. Given a station id, model code, and one or more imageset UUIDs, this:
 
 The model config and model artifact are fetched once and reused across every imageset. Each
 imageset is scored independently: a failure on one is logged and the rest still run, but the
-job exits non-zero if any imageset failed so Batch marks it FAILED.
+job exits non-zero if any imageset failed so Batch marks it FAILED. Imagesets that have
+DONE images but zero rows after the model's filters are skipped and reported at the end.
 
 Params come from CLI args or env vars (Batch may pass either). DB credentials come from
 FPE_DB_SECRET (a Secrets Manager secret name) if set, else the discrete DB_HOST/DB_PORT/
@@ -37,6 +38,7 @@ import boto3
 from botocore.config import Config
 
 from fpe_imageset import (
+    EmptyImagesetAfterFilter,
     build_imageset_dataframe,
     connect_db,
     fetch_model_uuid,
@@ -107,6 +109,7 @@ def predict_imagesets(station_id, model_code, imageset_uuids, batch_size, num_wo
     print(f"filters: {filters}")
 
     failures = []
+    skipped = []
 
     # DB: resolve the model UUID and build the filtered image dataframe for each imageset
     conn = connect_db(get_db_config())
@@ -119,11 +122,28 @@ def predict_imagesets(station_id, model_code, imageset_uuids, batch_size, num_wo
                 dataframes[imageset_uuid] = build_imageset_dataframe(
                     conn, imageset_uuid, station_id, timezone, filters
                 )
+            except EmptyImagesetAfterFilter as e:
+                print(f"SKIP imageset {imageset_uuid}: {e}")
+                skipped.append(imageset_uuid)
             except Exception as e:
                 print(f"ERROR building dataframe for imageset {imageset_uuid}: {e}", file=sys.stderr)
                 failures.append(imageset_uuid)
     finally:
         conn.close()
+
+    if not dataframes:
+        print(
+            f"done: 0 of {len(imageset_uuids)} imagesets scored; "
+            f"skipped={len(skipped)} failed={len(failures)}"
+        )
+        if skipped:
+            print(f"skipped imagesets: {', '.join(skipped)}")
+        if failures:
+            raise Exception(
+                f"{len(failures)} of {len(imageset_uuids)} imagesets failed: "
+                f"{', '.join(failures)}"
+            )
+        return []
 
     # download + extract the model once, then run batched inference per imageset under a temp workdir
     import fpe_inference
@@ -157,7 +177,12 @@ def predict_imagesets(station_id, model_code, imageset_uuids, batch_size, num_wo
                 print(f"ERROR scoring imageset {imageset_uuid}: {e}", file=sys.stderr)
                 failures.append(imageset_uuid)
 
-    print(f"done: {len(out_keys)} of {len(imageset_uuids)} imagesets scored")
+    print(
+        f"done: {len(out_keys)} of {len(imageset_uuids)} imagesets scored; "
+        f"skipped={len(skipped)} failed={len(failures)}"
+    )
+    if skipped:
+        print(f"skipped imagesets: {', '.join(skipped)}")
     if failures:
         raise Exception(
             f"{len(failures)} of {len(imageset_uuids)} imagesets failed: {', '.join(failures)}"

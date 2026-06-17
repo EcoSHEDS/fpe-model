@@ -29,6 +29,11 @@ DEFAULT_FILTERS = {
     "max_month": 12,
 }
 
+
+class EmptyImagesetAfterFilter(Exception):
+    """Raised when an imageset has DONE images but none match the model filters."""
+
+
 # connection params read from these environment variables (no config.yml)
 _DB_ENV_VARS = {
     "host": "DB_HOST",
@@ -187,8 +192,8 @@ def build_imageset_dataframe(conn, imageset_uuid, station_id, timezone, filters,
 
     Validates the imageset belongs to ``station_id``, fetches its DONE images, applies
     the model's daytime/seasonal filters in the station's local timezone, and returns a
-    dataframe with columns ``split, image_id, timestamp, filename, url`` sorted by
-    timestamp -- the transform-input schema consumed by the inference step.
+    dataframe with columns ``image_id, timestamp, filename, url`` sorted by
+    timestamp -- the schema consumed by the inference step.
 
     The imageset is identified by its ``uuid`` (the public identifier used in image storage
     paths, ``imagesets/{uuid}/...``), not the integer primary key.
@@ -197,7 +202,9 @@ def build_imageset_dataframe(conn, imageset_uuid, station_id, timezone, filters,
     and ``filtered`` (rows returned) so callers can log counts without re-querying.
 
     Raises on: imageset not found, imageset/station mismatch, no DONE images, or no
-    images remaining after the filter.
+    images remaining after the filter. The post-filter empty case raises
+    ``EmptyImagesetAfterFilter`` so batch callers can skip it without treating it
+    as a failed imageset.
     """
     imageset_station_id = fetch_imageset_station(conn, imageset_uuid)
     if imageset_station_id is None:
@@ -241,7 +248,7 @@ def build_imageset_dataframe(conn, imageset_uuid, station_id, timezone, filters,
     pct = (n_filtered / n_total) if n_total else 0
     print(f"# images (after filter): {n_filtered} ({pct:.0%} of {n_total})")
     if n_filtered == 0:
-        raise Exception(
+        raise EmptyImagesetAfterFilter(
             "no images remain after applying the model's filters "
             f"({filters}); nothing to predict"
         )

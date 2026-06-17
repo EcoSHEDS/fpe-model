@@ -47,14 +47,11 @@ def test_filter_schema_and_order(monkeypatch):
         conn=None, imageset_uuid="e8d465f6-5784-4231-967f-9000428e9748", station_id=42,
         timezone="America/New_York", filters=fpe_imageset.DEFAULT_FILTERS, stats=stats,
     )
-    # exact column schema / order that images.csv requires
-    assert list(out.columns) == ["split", "image_id", "timestamp", "filename", "url", "value"]
+    # exact column schema / order that imageset inference requires
+    assert list(out.columns) == ["image_id", "timestamp", "filename", "url"]
     # 19:00-local row dropped by the hour filter; 2 of 3 remain
     assert list(out["image_id"]) == [1, 2]
     assert stats == {"total": 3, "filtered": 2}
-    # constants written for every imageset row
-    assert (out["split"] == "test-out").all()
-    assert out["value"].isna().all()
     # filename = url path without leading slash
     assert list(out["filename"]) == ["img/a.jpg", "img/b.jpg"]
     # sorted by timestamp ascending
@@ -83,11 +80,13 @@ def test_empty_after_filter_raises(monkeypatch):
     # single row at local 19:00 (dropped) -> nothing survives the filter
     only_dropped = SYNTH_IMAGES.iloc[[2]].reset_index(drop=True)
     _patch(monkeypatch, images=only_dropped)
-    with pytest.raises(Exception, match="no images remain"):
+    stats = {}
+    with pytest.raises(fpe_imageset.EmptyImagesetAfterFilter, match="no images remain"):
         fpe_imageset.build_imageset_dataframe(
             conn=None, imageset_uuid="e8d465f6-5784-4231-967f-9000428e9748", station_id=42,
-            timezone="America/New_York", filters=fpe_imageset.DEFAULT_FILTERS,
+            timezone="America/New_York", filters=fpe_imageset.DEFAULT_FILTERS, stats=stats,
         )
+    assert stats == {"total": 1, "filtered": 0}
 
 
 def test_get_db_config_missing_env(monkeypatch):
