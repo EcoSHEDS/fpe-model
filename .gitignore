@@ -8,7 +8,7 @@ __pycache__/
 .venv/
 .ipynb_checkpoints
 
-.env.local
+.env*.local
 .Rproj.user
 r/.Rhistory
 r/config.yml
@@ -17,3 +17,4 @@ r/qmd/*.md
 r/qmd/*.rmarkdown
 r/qmd/*_files/
 r/notes/*/*
+.positai
