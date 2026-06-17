@@ -187,7 +187,7 @@ def build_imageset_dataframe(conn, imageset_uuid, station_id, timezone, filters,
 
     Validates the imageset belongs to ``station_id``, fetches its DONE images, applies
     the model's daytime/seasonal filters in the station's local timezone, and returns a
-    dataframe with columns ``split, image_id, timestamp, filename, url, value`` sorted by
+    dataframe with columns ``split, image_id, timestamp, filename, url`` sorted by
     timestamp -- the transform-input schema consumed by the inference step.
 
     The imageset is identified by its ``uuid`` (the public identifier used in image storage
@@ -247,6 +247,6 @@ def build_imageset_dataframe(conn, imageset_uuid, station_id, timezone, filters,
         )
 
     out = images.sort_values("timestamp")[
-        ["image_id", "timestamp", "filename", "url", "value"]
+        ["image_id", "timestamp", "filename", "url"]
     ]
     return out

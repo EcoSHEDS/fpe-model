@@ -7,7 +7,7 @@ scoring. Given a station id, model code, and one or more imageset UUIDs, this:
   2. looks up the model UUID in the DB and pulls models/{uuid}/model.tar.gz from the storage bucket,
   3. builds the filtered DONE-image dataframe from Postgres for each imageset (fpe_imageset; looked up by uuid),
   4. runs batched, parity-preserving inference on CPU (fpe_inference), reusing the single downloaded model,
-  5. writes predictions.csv (split,image_id,timestamp,filename,url,value,score) to each imageset's
+  5. writes predictions.csv (image_id,timestamp,filename,url,score) to each imageset's
      transform key on the model bucket -- identical schema/location to the SageMaker path.
 
 The model config and model artifact are fetched once and reused across every imageset. Each
