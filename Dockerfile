@@ -38,6 +38,6 @@ COPY src/transform.py \
 # environment with no internet egress.
 RUN python -c "import torchvision; torchvision.models.resnet18(pretrained=True)"
 
-# Batch passes params as args and/or env (STATION_ID/MODEL_CODE/IMAGESET_UUID/...);
+# Batch passes params as args and/or env (STATION_ID/MODEL_CODE/IMAGESET_UUIDS/...);
 # DB creds come from env (DB_HOST/DB_PORT/DB_NAME/DB_USER/DB_PASSWORD).
 ENTRYPOINT ["python", "predict-imageset.py"]

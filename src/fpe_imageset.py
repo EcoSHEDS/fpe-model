@@ -80,13 +80,18 @@ def _map_secret_to_db_config(secret):
     """Map a DB-credentials secret dict to psycopg2 connection params.
 
     Accepts both the R `config` key style (database/user) and the RDS-managed-secret
-    style (dbname/username) for the db name and user fields.
+    style (dbname/username) for the db name and user fields. The db name falls back to
+    "postgres" when the secret omits it (RDS-managed secrets often carry no dbname).
     """
-    def pick(*keys):
+    _REQUIRED = object()
+
+    def pick(*keys, default=_REQUIRED):
         for k in keys:
             value = secret.get(k)
             if value is not None and value != "":
                 return value
+        if default is not _REQUIRED:
+            return default
         raise RuntimeError(
             f"FPE_DB_SECRET is missing a required field (one of {keys})"
         )
@@ -94,7 +99,7 @@ def _map_secret_to_db_config(secret):
     return {
         "host": pick("host"),
         "port": pick("port"),
-        "dbname": pick("dbname", "database"),
+        "dbname": pick("dbname", "database", default="postgres"),
         "user": pick("user", "username"),
         "password": pick("password"),
     }
@@ -171,6 +176,7 @@ def fetch_imageset_images(conn, imageset_uuid):
         FROM images i
         JOIN imagesets iset ON iset.id = i.imageset_id
         WHERE iset.uuid = %s
+        AND NOT image_has_pii(pii_person, pii_vehicle, pii_on, pii_off)
         AND i.status = 'DONE'
     """
     return pd.read_sql_query(sql, conn, params=(imageset_uuid,))
@@ -240,12 +246,7 @@ def build_imageset_dataframe(conn, imageset_uuid, station_id, timezone, filters,
             f"({filters}); nothing to predict"
         )
 
-    # write images.csv with the same column schema as the station-wide pipeline so the
-    # external merge Lambda sees a familiar shape. For an imageset after training,
-    # the split should be test-out
-    images["split"] = "test-out"
-    images["value"] = pd.NA
     out = images.sort_values("timestamp")[
-        ["split", "image_id", "timestamp", "filename", "url", "value"]
+        ["image_id", "timestamp", "filename", "url", "value"]
     ]
     return out

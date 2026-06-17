@@ -51,7 +51,7 @@ the CLI arg wins when both are set).
 |---|---|---|---|---|
 | `--station-id` | `STATION_ID` | yes | — | FPE station id |
 | `--model-code` | `MODEL_CODE` | yes | — | model code (e.g. `RANK-FLOW-20240709`) |
-| `--imageset-uuid` | `IMAGESET_UUID` | yes | — | imageset UUID to score (the `imagesets.uuid`, as in storage paths `imagesets/{uuid}/...`) |
+| `--imageset-uuids` | `IMAGESET_UUIDS` | yes | — | one or more imageset UUIDs to score, comma-separated (the `imagesets.uuid`, as in storage paths `imagesets/{uuid}/...`). The singular `--imageset-uuid` / `IMAGESET_UUID` are accepted as backward-compatible aliases. The model config + artifact are fetched once and reused; each imageset is scored independently and the job exits non-zero if any fail. |
 | `--batch-size` | `BATCH_SIZE` | no | `32` | inference batch size |
 | `--num-workers` | `NUM_WORKERS` | no | `4` | `DataLoader` workers (S3 download/decode parallelism) |
 
@@ -108,7 +108,7 @@ environment has no egress.
 
 ```sh
 docker run --rm \
-  -e STATION_ID=29 -e MODEL_CODE=RANK-FLOW-20240709 -e IMAGESET_UUID=e8d465f6-5784-4231-967f-9000428e9748 \
+  -e STATION_ID=29 -e MODEL_CODE=RANK-FLOW-20240709 -e IMAGESET_UUIDS=e8d465f6-5784-4231-967f-9000428e9748,3b1c2d4e-... \
   -e DB_HOST=... -e DB_PORT=5432 -e DB_NAME=... -e DB_USER=... -e DB_PASSWORD=... \
   -e AWS_ACCESS_KEY_ID=... -e AWS_SECRET_ACCESS_KEY=... -e AWS_SESSION_TOKEN=... \
   -e AWS_REGION=us-west-2 \
@@ -118,7 +118,7 @@ docker run --rm \
 You can also run the entrypoint without Docker (needs `requirements.txt` + torch installed):
 
 ```sh
-STATION_ID=29 MODEL_CODE=RANK-FLOW-20240709 IMAGESET_UUID=e8d465f6-5784-4231-967f-9000428e9748 \
+STATION_ID=29 MODEL_CODE=RANK-FLOW-20240709 IMAGESET_UUIDS=e8d465f6-5784-4231-967f-9000428e9748 \
 DB_HOST=... DB_PORT=5432 DB_NAME=... DB_USER=... DB_PASSWORD=... \
 AWS_PROFILE=conte-prod \
 python src/predict-imageset.py
@@ -130,9 +130,10 @@ The compute environment, job queue, and IAM are infra-managed; this repo provide
 container and the code it runs. The job definition must supply:
 
 - **Container image:** the ECR URI pushed above.
-- **Command / environment:** `STATION_ID`, `MODEL_CODE`, `IMAGESET_UUID` (and optionally
-  `BATCH_SIZE`, `NUM_WORKERS`). These can be `containerProperties.command` overrides or
-  `environment` entries; the entrypoint accepts either form.
+- **Command / environment:** `STATION_ID`, `MODEL_CODE`, `IMAGESET_UUIDS` (comma-separated;
+  the legacy `IMAGESET_UUID` is still accepted) and optionally `BATCH_SIZE`, `NUM_WORKERS`.
+  These can be `containerProperties.command` overrides or `environment` entries; the entrypoint
+  accepts either form.
 - **Database credentials:** set `FPE_DB_SECRET` to the DB secret name; the container fetches it
   at runtime via the **job role** (which needs `secretsmanager:GetSecretValue`). No job-definition
   `secrets`/`valueFrom` block is required, so the **execution role** needs no secrets permission.
@@ -248,7 +249,7 @@ aws batch submit-job \
   --job-name "predict-<imageset-uuid>" \
   --job-queue   "${appName}-${env}-batch-job-queue" \
   --job-definition "${appName}-${env}-batch-job-definition-predict" \
-  --container-overrides '{"command":["--station-id","29","--model-code","RANK-FLOW-20240410","--imageset-uuid","<imageset-uuid>"]}' \
+  --container-overrides '{"command":["--station-id","29","--model-code","RANK-FLOW-20240410","--imageset-uuids","<uuid-1>,<uuid-2>"]}' \
   --region us-west-2 --profile conte-prod
 ```
 
