@@ -56,12 +56,12 @@ These instructions assume the FPE database, R configuration, AWS profile, and S3
 Use a working directory to hold generated datasets, model inputs, downloaded model artifacts, predictions, and reports. A station list is a plain text file with one station ID per line.
 
 ```sh
-FPE_DIR=/mnt/d/fpe/rank
-STATIONS_FILE="${FPE_DIR}/stations.txt"
-STATION_ID=29
-VARIABLE_ID=FLOW_CFS
-DATASET_CODE=RANK-FLOW-20240709
-MODEL_CODE=RANK-FLOW-20240709
+export FPE_DIR=/mnt/d/fpe/rank/20260617
+export STATIONS_FILE="${FPE_DIR}/stations.txt"
+export STATION_ID=29
+export VARIABLE_ID=FLOW_CFS
+export DATASET_CODE=RANK-FLOW-20260617
+export MODEL_CODE=RANK-FLOW-20260617
 ```
 
 The pipeline writes files using this layout:
