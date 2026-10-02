@@ -94,13 +94,14 @@ parser <- add_option(
 
 if (interactive()) {
   cmd_args <- c(
-    "--directory=/mnt/d/fpe/rank",
-    "--station-id=178",
-    "--variable-id=FLOW_CFS",
+    "--directory=/mnt/d/fpe/rank/20261001/",
+    "--station-id=480",
+    "--variable-id=OTHER",
     "--overwrite",
-    "--dataset-code=RANK-FLOW-20240613",
-    #"--annotations-end=2023-09-30",
-    "RANK-FLOW-20240613"
+    "--dataset-code=RANK-FLOW-20261001",
+    "--min-hour=19",
+    "--max-hour=5",
+    "RANK-FLOW-20261001"
   )
 } else {
   cmd_args <- commandArgs(trailingOnly = TRUE)
@@ -318,13 +319,24 @@ images_total <- read_csv(file.path(dataset_dir, "images.csv"), show_col_types = 
   )
 images <- images_total %>%
   filter(
-    hour(timestamp) >= images_hours[1],
-    hour(timestamp) <= images_hours[2],
     month(timestamp) >= images_months[1],
     month(timestamp) <= images_months[2],
     as_date(timestamp) >= images_dates[1],
     as_date(timestamp) <= images_dates[2]
   )
+if (images_hours[1] < images_hours[2]) {
+  images <- images %>%
+    filter(
+      hour(timestamp) >= images_hours[1],
+      hour(timestamp) <= images_hours[2]
+    )
+} else {
+  images <- images %>%
+    filter(
+      hour(timestamp) >= images_hours[1] |
+      hour(timestamp) <= images_hours[2]
+    )
+}
 log_info("images: n={scales::comma(nrow(images))} ({scales::percent(nrow(images)/nrow(images_total), accuracy = 1)} of {scales::comma(nrow(images_total))} total)")
 
 log_info("annotations: loading")

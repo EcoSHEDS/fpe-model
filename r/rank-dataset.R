@@ -40,10 +40,10 @@ parser <- add_option(
 if (interactive()) {
   cmd_args <- c(
     "--directory=/mnt/d/fpe/rank",
-    "--station-id=81",
+    "--station-id=480",
     "--variable-id=FLOW_CFS",
     "--overwrite",
-    "RANK-FLOW-20240613"
+    "RANK-FLOW-20261001"
   )
 } else {
   cmd_args <- commandArgs(trailingOnly = TRUE)
@@ -316,6 +316,10 @@ annotations_db <- tbl(con, "annotations") %>%
   ) %>%
   select(annotation_id = id, user_id, station_id, station_name, duration_sec, n, url) %>%
   collect()
+
+if (nrow(annotations_db) == 0) {
+  stop(glue("No annotations found for station {station_id} and variable {annotation_variable}"))
+}
 
 log_info("fetching: annotations from s3")
 annotations_raw <- annotations_db %>%
